@@ -1,0 +1,135 @@
+# AI Gateway — Example Configuration
+# Copy to config.yaml, set env vars, then run: ./ai-gateway
+# CLI:  ai-gateway --config /path/to/config.yaml
+# Env:  set CONFIG_PATH=C:\path\to\config.yaml && ai-gateway
+#
+# Windows service (NSSM — https://nssm.cc):
+#   nssm install ai-gateway "C:\path\to\ai-gateway.exe"
+#   nssm set ai-gateway AppDirectory "C:\path\to"
+#   nssm set ai-gateway AppEnvironmentExtra "OPENAI_API_KEY=sk-..."
+#   nssm start ai-gateway
+# Or: sc create ai-gateway binPath="C:\path\to\ai-gateway.exe"
+#
+# API keys are stored as env var names — resolved at runtime.
+# Custom header values support ${ENV_VAR} substitution.
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  request_timeout_seconds: 30
+  max_request_size_mb: 10
+
+# tls:
+#   enabled: true
+#   cert_path: "./cert.pem"
+#   key_path: "./key.pem"
+
+# Providers — at least one required
+# Types: openai | ollama | bedrock | groq | together | vllm | lmstudio | nvidia_nim
+providers:
+  - name: "openai"
+    type: "openai"
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"       # Env var name, not the key itself
+    timeout_seconds: 30
+    max_connections: 100
+    rate_limit_per_minute: 60           # 0 = unlimited
+    # custom_headers:
+    #   X-Custom: "${MY_ENV_VAR}"
+
+  - name: "ollama-local"
+    type: "ollama"
+    base_url: "http://localhost:11434"
+    timeout_seconds: 120
+
+  # Bedrock supports two authentication modes:
+  # 1) API key auth via the Bedrock Mantle OpenAI-compatible endpoint
+  # 2) AWS SDK auth via env vars, shared credentials file, or IAM role
+  # - name: "bedrock-api-key"
+  #   type: "bedrock"
+  #   region: "us-east-1"              # Optional, defaults to us-east-1
+  #   api_key_env: "AWS_BEARER_TOKEN_BEDROCK"
+  #   timeout_seconds: 60
+  #   max_connections: 100
+  #
+  # - name: "bedrock-sdk"
+  #   type: "bedrock"
+  #   region: "us-east-1"              # Uses AWS SDK credentials from env / file / IAM
+  #   timeout_seconds: 60
+
+# Model groups — equivalent models for failover routing
+model_groups:
+  - name: "gpt-4-group"
+    version_fallback_enabled: false     # true = try older versions first
+    models:
+      - provider: "openai"
+        model: "gpt-4"
+        cost_per_million_input_tokens: 10.0
+        cost_per_million_output_tokens: 30.0
+        priority: 100                   # Lower = higher priority
+
+  - name: "local-llama"
+    version_fallback_enabled: false
+    models:
+      - provider: "ollama-local"
+        model: "llama3"
+        priority: 100
+
+circuit_breaker:
+  failure_threshold: 3
+  backoff_sequence_seconds: [5, 10, 20, 40, 300]
+  success_threshold: 1
+
+retry:
+  max_retries_per_provider: 1
+  backoff_sequence_seconds: [1, 2, 4]
+
+logging:
+  level: "info"                         # trace | debug | info | warn | error
+  database_path: "./logs.db"
+  request_body_logging: false
+  response_body_logging: false
+  max_body_size_bytes: 10000
+  excluded_fields: ["api_key", "authorization"]
+  retention_days: 30
+  cleanup_schedule_hours: 24
+
+admin:
+  enabled: true
+  path: "/admin"
+  auth:
+    enabled: false
+    username_env: "ADMIN_USERNAME"
+    password_env: "ADMIN_PASSWORD"
+
+dashboard:
+  enabled: true
+  path: "/dashboard"
+  metrics_update_interval_seconds: 1
+
+cors:
+  enabled: false
+  allowed_origins: ["*"]
+  allowed_methods: ["GET", "POST", "OPTIONS"]
+  allowed_headers: ["Content-Type", "Authorization"]
+
+# semantic_cache:
+#   enabled: true
+#   qdrant_url: "http://localhost:6334"   # gRPC port (not 6333 which is REST)
+#   collection_name: "ai_gateway_cache"
+#   similarity_threshold: 0.95
+#   embedding_provider: "openai"
+#   embedding_model: "text-embedding-3-small"
+#   ttl_seconds: 3600
+#   max_cache_size: 10000
+
+# prometheus:
+#   enabled: true
+#   path: "/metrics"
+
+first_launch_completed: false
+
+tray:
+  show_notifications: true
+  auto_open_browser: true
+  splash_duration_ms: 3000

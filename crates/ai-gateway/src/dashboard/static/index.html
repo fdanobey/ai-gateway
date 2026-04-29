@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OBEY-API Dashboard</title>
+<link rel="icon" type="image/x-icon" href="icon.ico">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f172a;--surface:#1e293b;--surface2:#334155;--border:#475569;--text:#e2e8f0;
+--text-muted:#94a3b8;--primary:#3b82f6;--success:#22c55e;--warning:#f59e0b;--danger:#ef4444;
+--radius:8px;--shadow:0 2px 8px rgba(0,0,0,.3)}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.5;min-height:100vh}
+
+/* Header */
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:.75rem 1.5rem;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:1.1rem;font-weight:600;display:flex;align-items:center;gap:.5rem}
+header h1 img{width:24px;height:24px;border-radius:4px}
+header .header-right{display:flex;align-items:center;gap:1rem}
+.conn-status{display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--text-muted)}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--danger);transition:background .3s}
+.conn-dot.connected{background:var(--success)}
+.admin-link{color:var(--primary);font-size:.85rem;text-decoration:none}
+.admin-link:hover{text-decoration:underline}
+
+/* Nav tabs */
+.tab-bar{background:var(--surface);border-bottom:1px solid var(--border);display:flex;gap:0;padding:0 1.5rem}
+.tab-btn{background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);
+padding:.6rem 1rem;font-size:.85rem;cursor:pointer;transition:color .15s,border-color .15s}
+.tab-btn:hover,.tab-btn:focus-visible{color:var(--text);outline:none}
+.tab-btn[aria-selected="true"]{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}
+
+/* Layout */
+.container{padding:1.5rem;max-width:1400px;margin:0 auto}
+.section{display:none}
+.section.active{display:block}
+
+/* Metric cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem;margin-bottom:1.5rem}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;box-shadow:var(--shadow)}
+.card-label{font-size:.75rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25rem}
+.card-value{font-size:1.5rem;font-weight:700}
+.card-value.cost{color:var(--warning)}
+
+/* Tables */
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid var(--border)}
+th{background:var(--surface2);color:var(--text-muted);font-weight:600;font-size:.75rem;text-transform:uppercase;
+letter-spacing:.05em;cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{color:var(--text)}
+th .sort-arrow{margin-left:.25rem;font-size:.65rem}
+td{color:var(--text)}
+tbody tr:hover{background:rgba(59,130,246,.06)}
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;margin-bottom:1.5rem;box-shadow:var(--shadow)}
+
+/* Badges */
+.badge{display:inline-block;padding:.15rem .5rem;border-radius:999px;font-size:.7rem;font-weight:600;text-transform:uppercase}
+.badge-healthy{background:rgba(34,197,94,.15);color:var(--success)}
+.badge-degraded{background:rgba(245,158,11,.15);color:var(--warning)}
+.badge-unhealthy{background:rgba(239,68,68,.15);color:var(--danger)}
+.badge-closed{background:rgba(34,197,94,.15);color:var(--success)}
+.badge-open{background:rgba(239,68,68,.15);color:var(--danger)}
+.badge-halfopen{background:rgba(245,158,11,.15);color:var(--warning)}
+
+/* Charts */
+.chart-row{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1.5rem}
+.chart-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;box-shadow:var(--shadow)}
+.chart-box h3{font-size:.85rem;color:var(--text-muted);margin-bottom:.75rem}
+.chart-box canvas{max-height:250px}
+@media(max-width:900px){.chart-row{grid-template-columns:1fr}}
+
+/* Filter form */
+.filter-bar{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem;align-items:end}
+.filter-bar .fg{display:flex;flex-direction:column;gap:.2rem}
+.filter-bar label{font-size:.7rem;color:var(--text-muted);text-transform:uppercase}
+.filter-bar input,.filter-bar select{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+color:var(--text);padding:.4rem .6rem;font-size:.8rem}
+.filter-bar input:focus,.filter-bar select:focus{outline:none;border-color:var(--primary)}
+.btn{padding:.4rem .8rem;border:none;border-radius:var(--radius);font-size:.8rem;font-weight:500;cursor:pointer;transition:background .15s}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:#2563eb}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{background:var(--border)}
+
+/* Section titles */
+.section-title{font-size:1rem;font-weight:600;margin-bottom:1rem;padding-bottom:.5rem;border-bottom:1px solid var(--border)}
+
+/* Empty state */
+.empty{text-align:center;padding:2rem;color:var(--text-muted);font-size:.85rem}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><img src="menu_logo.jpg" alt="">OBEY-API Dashboard</h1>
+  <div class="header-right">
+    <div class="conn-status" aria-live="polite">
+      <span class="conn-dot" id="conn-dot" title="WebSocket disconnected"></span>
+      <span id="conn-label">Disconnected</span>
+    </div>
+    <a href="#" class="admin-link" id="admin-link">Admin Panel</a>
+  </div>
+</header>
+
+<div class="tab-bar" role="tablist" aria-label="Dashboard sections">
+  <button class="tab-btn" role="tab" aria-selected="true" data-section="overview" id="tab-overview">Metrics Overview</button>
+  <button class="tab-btn" role="tab" aria-selected="false" data-section="providers" id="tab-providers">Provider Health</button>
+  <button class="tab-btn" role="tab" aria-selected="false" data-section="costs" id="tab-costs">Cost Breakdown</button>
+  <button class="tab-btn" role="tab" aria-selected="false" data-section="errors" id="tab-errors">Recent Errors</button>
+  <button class="tab-btn" role="tab" aria-selected="false" data-section="logs" id="tab-logs">Log Viewer</button>
+</div>
+
+<div class="container">
+
+  <!-- Metrics Overview (Req 16.3-16.5, 16.8-16.10, 16.12) -->
+  <section class="section active" id="sec-overview" role="tabpanel" aria-labelledby="tab-overview">
+    <h2 class="section-title">Metrics Overview</h2>
+    <div class="cards">
+      <div class="card"><div class="card-label">Total Requests</div><div class="card-value" id="m-req-count">0</div></div>
+      <div class="card"><div class="card-label">Avg Response Time</div><div class="card-value" id="m-avg-rt">0 ms</div></div>
+      <div class="card"><div class="card-label">Request Rate</div><div class="card-value" id="m-req-rate">0 req/min</div></div>
+      <div class="card"><div class="card-label">Active Requests</div><div class="card-value" id="m-active">0</div></div>
+      <div class="card"><div class="card-label">Cumulative Cost</div><div class="card-value cost" id="m-cost">$0.00</div></div>
+      <div class="card"><div class="card-label">Cache Hit Rate</div><div class="card-value" id="m-cache">N/A</div></div>
+    </div>
+    <div class="chart-row">
+      <div class="chart-box"><h3>Request Rate (last 60s)</h3><canvas id="chart-req-rate"></canvas></div>
+      <div class="chart-box"><h3>Response Time (last 60s)</h3><canvas id="chart-resp-time"></canvas></div>
+    </div>
+  </section>
+
+  <!-- Provider Health (Req 16.6, 16.7, 31.1-31.9) -->
+  <section class="section" id="sec-providers" role="tabpanel" aria-labelledby="tab-providers">
+    <h2 class="section-title">Provider Health</h2>
+    <div class="table-wrap">
+      <table id="provider-table" aria-label="Provider health status">
+        <thead>
+          <tr>
+            <th data-sort="provider">Provider <span class="sort-arrow"></span></th>
+            <th data-sort="status">Health <span class="sort-arrow"></span></th>
+            <th data-sort="circuit">Circuit Breaker <span class="sort-arrow"></span></th>
+            <th data-sort="total">Total Requests <span class="sort-arrow"></span></th>
+            <th data-sort="success_rate">Success Rate <span class="sort-arrow"></span></th>
+            <th data-sort="avg_rt">Avg Response Time <span class="sort-arrow"></span></th>
+            <th data-sort="last_success">Last Success <span class="sort-arrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="provider-tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="provider-empty">No provider data yet</div>
+
+    <h2 class="section-title" style="margin-top:1.5rem">Per-Model Circuit Breakers</h2>
+    <div class="table-wrap">
+      <table id="cb-table" aria-label="Per-model circuit breaker states">
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Model</th>
+            <th>Circuit Breaker</th>
+          </tr>
+        </thead>
+        <tbody id="cb-tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="cb-empty">No circuit breaker data yet</div>
+  </section>
+
+  <!-- Cost Breakdown (Req 16.8, 16.9, 30.1-30.3) -->
+  <section class="section" id="sec-costs" role="tabpanel" aria-labelledby="tab-costs">
+    <h2 class="section-title">Cost Breakdown</h2>
+    <div class="chart-row">
+      <div class="chart-box"><h3>Cost by Provider</h3><canvas id="chart-cost-provider"></canvas></div>
+      <div class="chart-box"><h3>Cost Trend</h3><canvas id="chart-cost-trend"></canvas></div>
+    </div>
+    <div class="table-wrap">
+      <table aria-label="Cost by provider">
+        <thead><tr><th>Provider</th><th>Cost</th><th>% of Total</th></tr></thead>
+        <tbody id="cost-tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="cost-empty">No cost data yet</div>
+  </section>
+
+  <!-- Recent Errors (Req 16.11) -->
+  <section class="section" id="sec-errors" role="tabpanel" aria-labelledby="tab-errors">
+    <h2 class="section-title">Recent Errors</h2>
+    <div class="table-wrap">
+      <table aria-label="Recent errors">
+        <thead><tr><th>Timestamp</th><th>Provider</th><th>Model</th><th>Status</th><th>Error</th></tr></thead>
+        <tbody id="errors-tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="errors-empty">No errors recorded</div>
+  </section>
+
+  <!-- Log Viewer (Req 16.13, 33.6) -->
+  <section class="section" id="sec-logs" role="tabpanel" aria-labelledby="tab-logs">
+    <h2 class="section-title">Log Viewer</h2>
+    <form class="filter-bar" id="log-filter-form" aria-label="Log filters">
+      <div class="fg">
+        <label for="f-from">From</label>
+        <input type="datetime-local" id="f-from">
+      </div>
+      <div class="fg">
+        <label for="f-to">To</label>
+        <input type="datetime-local" id="f-to">
+      </div>
+      <div class="fg">
+        <label for="f-provider">Provider</label>
+        <input type="text" id="f-provider" placeholder="All">
+      </div>
+      <div class="fg">
+        <label for="f-model">Model</label>
+        <input type="text" id="f-model" placeholder="All">
+      </div>
+      <div class="fg">
+        <label for="f-status">Status Code</label>
+        <input type="number" id="f-status" placeholder="Any" min="100" max="599">
+      </div>
+      <div class="fg">
+        <label for="f-trace">Trace ID</label>
+        <input type="text" id="f-trace" placeholder="Any">
+      </div>
+      <button type="submit" class="btn btn-primary">Search</button>
+      <button type="reset" class="btn btn-secondary">Clear</button>
+    </form>
+    <div class="table-wrap">
+      <table aria-label="Request logs">
+        <thead>
+          <tr>
+            <th>Timestamp</th><th>Trace ID</th><th>Provider</th><th>Model</th>
+            <th>Status</th><th>Duration</th><th>Cost</th>
+          </tr>
+        </thead>
+        <tbody id="logs-tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="logs-empty">Use filters above to search logs</div>
+  </section>
+</div>
+
+<script>
+"use strict";
+(function(){
+  var dashboardBasePath = window.__dashboardBasePath || location.pathname.replace(/\/?$/, '');
+  var adminBasePath = window.__adminBasePath || '/admin';
+  var dashboardPollIntervalMs = window.__dashboardPollIntervalMs || 5000;
+  if(adminBasePath){ $('admin-link').setAttribute('href', adminBasePath); }
+  // --- Tab Navigation ---
+  var tabs = document.querySelectorAll('.tab-btn');
+  var sections = document.querySelectorAll('.section');
+
+  function switchSection(id) {
+    tabs.forEach(function(t){ t.setAttribute('aria-selected','false'); });
+    sections.forEach(function(s){ s.classList.remove('active'); });
+    var tab = document.querySelector('[data-section="'+id+'"]');
+    var sec = document.getElementById('sec-'+id);
+    if(tab) tab.setAttribute('aria-selected','true');
+    if(sec) sec.classList.add('active');
+  }
+
+  tabs.forEach(function(tab){
+    tab.addEventListener('click', function(){ switchSection(this.dataset.section); });
+    tab.addEventListener('keydown', function(e){
+      var items = Array.from(tabs);
+      var idx = items.indexOf(this);
+      if(e.key==='ArrowRight'||e.key==='ArrowDown'){e.preventDefault();var n=items[(idx+1)%items.length];n.focus();n.click();}
+      if(e.key==='ArrowLeft'||e.key==='ArrowUp'){e.preventDefault();var p=items[(idx-1+items.length)%items.length];p.focus();p.click();}
+    });
+  });
+
+  // --- Helpers ---
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ var d=document.createElement('div');d.textContent=s;return d.innerHTML; }
+  function fmtTime(ts){
+    if(!ts) return '—';
+    var d=new Date(typeof ts==='number'?ts*1000:ts);
+    return d.toLocaleString();
+  }
+  function fmtCost(v){ return '$'+Number(v||0).toFixed(4); }
+  function fmtPct(v){ return (Number(v||0)*100).toFixed(1)+'%'; }
+  function fmtMs(v){ return Number(v||0).toFixed(1)+' ms'; }
+
+  // --- Chart Setup (Req 16.15) ---
+  var chartColors = {line:'rgba(59,130,246,.8)',fill:'rgba(59,130,246,.1)',grid:'rgba(71,85,105,.3)',tick:'#94a3b8'};
+  var chartOpts = {responsive:true,maintainAspectRatio:false,animation:{duration:300},
+    scales:{x:{grid:{color:chartColors.grid},ticks:{color:chartColors.tick,maxTicksLimit:10}},
+            y:{grid:{color:chartColors.grid},ticks:{color:chartColors.tick},beginAtZero:true}},
+    plugins:{legend:{display:false}}};
+
+  var reqRateData = [];
+  var respTimeData = [];
+  var costTrendData = [];
+  var MAX_POINTS = 60;
+
+  var reqRateChart, respTimeChart, costProviderChart, costTrendChart;
+
+  function initCharts(){
+    if(typeof Chart==='undefined') return;
+    var baseDataset = {borderWidth:2,pointRadius:0,tension:.3,fill:true,
+      borderColor:chartColors.line,backgroundColor:chartColors.fill};
+
+    reqRateChart = new Chart($('chart-req-rate'),{type:'line',
+      data:{labels:[],datasets:[Object.assign({},baseDataset,{data:[]})]},options:chartOpts});
+
+    respTimeChart = new Chart($('chart-resp-time'),{type:'line',
+      data:{labels:[],datasets:[Object.assign({},baseDataset,{data:[],borderColor:'rgba(245,158,11,.8)',backgroundColor:'rgba(245,158,11,.1)'})]},
+      options:chartOpts});
+
+    costProviderChart = new Chart($('chart-cost-provider'),{type:'doughnut',
+      data:{labels:[],datasets:[{data:[],backgroundColor:['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#f97316']}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{color:chartColors.tick}}}}});
+
+    costTrendChart = new Chart($('chart-cost-trend'),{type:'line',
+      data:{labels:[],datasets:[Object.assign({},baseDataset,{data:[],borderColor:'rgba(245,158,11,.8)',backgroundColor:'rgba(245,158,11,.1)'})]},
+      options:chartOpts});
+  }
+
+  function pushChartPoint(chart, dataArr, label, value){
+    dataArr.push(value);
+    if(dataArr.length>MAX_POINTS) dataArr.shift();
+    if(!chart) return;
+    chart.data.labels = dataArr.map(function(_,i){return i;});
+    chart.data.datasets[0].data = dataArr.slice();
+    chart.update('none');
+  }
+
+  // --- State ---
+  var providerData = [];
+  var sortCol = 'provider';
+  var sortAsc = true;
+  var lastCost = 0;
+
+  // --- Render Functions ---
+  function renderMetrics(m){
+    $('m-req-count').textContent = m.request_count||0;
+    $('m-avg-rt').textContent = fmtMs(m.avg_response_time_ms);
+    $('m-req-rate').textContent = (m.request_rate_per_min||0).toFixed(1)+' req/min';
+    $('m-active').textContent = m.active_requests||0;
+    $('m-cost').textContent = fmtCost(m.cumulative_cost);
+    $('m-cache').textContent = m.cache_hit_rate!=null ? fmtPct(m.cache_hit_rate) : 'N/A';
+
+    pushChartPoint(reqRateChart, reqRateData, '', m.request_rate_per_min||0);
+    pushChartPoint(respTimeChart, respTimeData, '', m.avg_response_time_ms||0);
+
+    var costDelta = (m.cumulative_cost||0) - lastCost;
+    lastCost = m.cumulative_cost||0;
+    pushChartPoint(costTrendChart, costTrendData, '', costDelta>=0?costDelta:0);
+  }
+
+  function renderProviders(providers){
+    providerData = providers||[];
+    sortAndRenderProviders();
+  }
+
+  function sortAndRenderProviders(){
+    var data = providerData.slice();
+    data.sort(function(a,b){
+      var va,vb;
+      switch(sortCol){
+        case 'provider':va=a.provider;vb=b.provider;break;
+        case 'status':va=a.status;vb=b.status;break;
+        case 'circuit':va=a.circuit_breaker_state||'closed';vb=b.circuit_breaker_state||'closed';break;
+        case 'total':va=a.total_requests;vb=b.total_requests;break;
+        case 'success_rate':va=a.success_rate;vb=b.success_rate;break;
+        case 'avg_rt':va=a.avg_response_time_ms;vb=b.avg_response_time_ms;break;
+        case 'last_success':va=a.last_success_timestamp||0;vb=b.last_success_timestamp||0;break;
+        default:va=a.provider;vb=b.provider;
+      }
+      if(typeof va==='string') return sortAsc?va.localeCompare(vb):vb.localeCompare(va);
+      return sortAsc?(va-vb):(vb-va);
+    });
+
+    var tbody = $('provider-tbody');
+    if(!data.length){tbody.innerHTML='';$('provider-empty').style.display='block';return;}
+    $('provider-empty').style.display='none';
+
+    var html='';
+    data.forEach(function(p){
+      var statusCls = p.status==='healthy'?'badge-healthy':p.status==='degraded'?'badge-degraded':'badge-unhealthy';
+      var cbState = p.circuit_breaker_state||'closed';
+      var cbCls = cbState==='closed'?'badge-closed':cbState==='open'?'badge-open':'badge-halfopen';
+      // Display provider name; if it contains ":" from per-model CB keys, show just the provider part
+      var displayName = p.provider;
+      html+='<tr><td>'+esc(displayName)+'</td>'
+        +'<td><span class="badge '+statusCls+'">'+esc(p.status)+'</span></td>'
+        +'<td><span class="badge '+cbCls+'">'+esc(cbState)+'</span></td>'
+        +'<td>'+p.total_requests+'</td>'
+        +'<td>'+fmtPct(p.success_rate)+'</td>'
+        +'<td>'+fmtMs(p.avg_response_time_ms)+'</td>'
+        +'<td>'+fmtTime(p.last_success_timestamp)+'</td></tr>';
+    });
+    tbody.innerHTML=html;
+  }
+
+  // Sortable headers
+  document.querySelectorAll('#provider-table th[data-sort]').forEach(function(th){
+    th.addEventListener('click',function(){
+      var col=this.dataset.sort;
+      if(sortCol===col){sortAsc=!sortAsc;}else{sortCol=col;sortAsc=true;}
+      sortAndRenderProviders();
+    });
+  });
+
+  function renderCircuitBreakers(cbStates){
+    var tbody=$('cb-tbody');
+    if(!cbStates||!cbStates.length){tbody.innerHTML='';$('cb-empty').style.display='block';return;}
+    $('cb-empty').style.display='none';
+    var html='';
+    cbStates.forEach(function(entry){
+      var key=entry[0],state=entry[1];
+      var parts=key.split(':');
+      var provider=parts[0]||key;
+      var model=parts.slice(1).join(':')||'—';
+      var cls=state==='closed'?'badge-closed':state==='open'?'badge-open':'badge-halfopen';
+      html+='<tr><td>'+esc(provider)+'</td><td>'+esc(model)+'</td>'
+        +'<td><span class="badge '+cls+'">'+esc(state)+'</span></td></tr>';
+    });
+    tbody.innerHTML=html;
+  }
+
+  function renderCosts(costByProvider, total){
+    var tbody=$('cost-tbody');
+    if(!costByProvider||!costByProvider.length){tbody.innerHTML='';$('cost-empty').style.display='block';return;}
+    $('cost-empty').style.display='none';
+
+    var html='';
+    costByProvider.forEach(function(item){
+      var name=item[0],cost=item[1];
+      var pct=total>0?((cost/total)*100).toFixed(1):'0.0';
+      html+='<tr><td>'+esc(name)+'</td><td>'+fmtCost(cost)+'</td><td>'+pct+'%</td></tr>';
+    });
+    tbody.innerHTML=html;
+
+    if(costProviderChart){
+      costProviderChart.data.labels=costByProvider.map(function(i){return i[0];});
+      costProviderChart.data.datasets[0].data=costByProvider.map(function(i){return i[1];});
+      costProviderChart.update('none');
+    }
+  }
+
+  function renderErrors(errors){
+    var tbody=$('errors-tbody');
+    if(!errors||!errors.length){tbody.innerHTML='';$('errors-empty').style.display='block';return;}
+    $('errors-empty').style.display='none';
+
+    var html='';
+    errors.forEach(function(e){
+      html+='<tr><td>'+fmtTime(e.timestamp)+'</td><td>'+esc(e.provider||'')+'</td>'
+        +'<td>'+esc(e.model||'')+'</td><td>'+esc(String(e.status_code||''))+'</td>'
+        +'<td>'+esc(e.error||'')+'</td></tr>';
+    });
+    tbody.innerHTML=html;
+  }
+
+  function renderLogs(logs){
+    var tbody=$('logs-tbody');
+    if(!logs||!logs.length){tbody.innerHTML='';$('logs-empty').style.display='block';return;}
+    $('logs-empty').style.display='none';
+
+    var html='';
+    logs.forEach(function(l){
+      html+='<tr><td>'+fmtTime(l.timestamp)+'</td><td>'+esc(l.trace_id||'')+'</td>'
+        +'<td>'+esc(l.provider||'')+'</td><td>'+esc(l.model||'')+'</td>'
+        +'<td>'+l.status_code+'</td><td>'+fmtMs(l.duration_ms)+'</td>'
+        +'<td>'+fmtCost(l.cost)+'</td></tr>';
+    });
+    tbody.innerHTML=html;
+  }
+
+  // --- WebSocket (Req 16.14, 40.1-40.7) ---
+  var ws = null;
+  var wsRetryCount = 0;
+  var wsMaxRetry = 10;
+  var wsBaseDelay = 1000;
+
+  function wsConnect(){
+    var proto = location.protocol==='https:'?'wss:':'ws:';
+    var path = (window.__dashboardBasePath||'/dashboard')+'/ws';
+    var url = proto+'//'+location.host+path;
+
+    try{ ws = new WebSocket(url); } catch(e){ scheduleReconnect(); return; }
+
+    ws.onopen = function(){
+      wsRetryCount=0;
+      $('conn-dot').classList.add('connected');
+      $('conn-dot').title='WebSocket connected';
+      $('conn-label').textContent='Connected';
+    };
+
+    ws.onmessage = function(evt){
+      try{
+        var msg = JSON.parse(evt.data);
+        if(msg.type==='metrics'&&msg.data){
+          renderMetrics(msg.data);
+          renderProviders(msg.data.provider_health);
+          renderCircuitBreakers(msg.data.circuit_breaker_states);
+          renderCosts(msg.data.cost_by_provider, msg.data.cumulative_cost);
+        }
+        if(msg.type==='errors'&&msg.data){ renderErrors(msg.data); }
+      }catch(e){/* ignore parse errors */}
+    };
+
+    ws.onclose = function(){
+      $('conn-dot').classList.remove('connected');
+      $('conn-dot').title='WebSocket disconnected';
+      $('conn-label').textContent='Disconnected';
+      scheduleReconnect();
+    };
+
+    ws.onerror = function(){ ws.close(); };
+  }
+
+  function scheduleReconnect(){
+    if(wsRetryCount>=wsMaxRetry) return;
+    var delay = Math.min(wsBaseDelay*Math.pow(2,wsRetryCount), 30000);
+    wsRetryCount++;
+    $('conn-label').textContent='Reconnecting ('+wsRetryCount+')...';
+    setTimeout(wsConnect, delay);
+  }
+
+  // --- Log Viewer Search (Req 16.13) ---
+  $('log-filter-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    var params = new URLSearchParams();
+    var from=$('f-from').value; if(from) params.set('from',new Date(from).toISOString());
+    var to=$('f-to').value; if(to) params.set('to',new Date(to).toISOString());
+    var prov=$('f-provider').value.trim(); if(prov) params.set('provider',prov);
+    var model=$('f-model').value.trim(); if(model) params.set('model',model);
+    var status=$('f-status').value.trim(); if(status) params.set('status_code',status);
+    var trace=$('f-trace').value.trim(); if(trace) params.set('trace_id',trace);
+
+    fetch(dashboardBasePath+'/logs?'+params.toString())
+      .then(function(r){return r.json();})
+      .then(function(data){renderLogs(data.logs||data);})
+      .catch(function(){$('logs-empty').style.display='block';$('logs-empty').textContent='Failed to fetch logs';});
+  });
+
+  function loadErrors(){
+    fetch(dashboardBasePath+'/errors')
+      .then(function(r){return r.json();})
+      .then(function(data){renderErrors(data.errors||data);})
+      .catch(function(){$('errors-empty').style.display='block';$('errors-empty').textContent='Failed to fetch recent errors';});
+  }
+
+  $('log-filter-form').addEventListener('reset', function(){
+    setTimeout(function(){$('logs-tbody').innerHTML='';$('logs-empty').style.display='block';$('logs-empty').textContent='Use filters above to search logs';},0);
+  });
+
+  // --- Fallback: poll metrics if WS unavailable ---
+  function pollMetrics(){
+    fetch(dashboardBasePath+'/metrics')
+      .then(function(r){return r.json();})
+      .then(function(data){
+        renderMetrics(data);
+        renderProviders(data.provider_health);
+        renderCircuitBreakers(data.circuit_breaker_states);
+        renderCosts(data.cost_by_provider, data.cumulative_cost);
+      })
+      .catch(function(){/* silent */});
+  }
+
+  // --- Init ---
+  initCharts();
+  wsConnect();
+  loadErrors();
+  // Poll as fallback every 5s in case WS is not available
+  setInterval(function(){ if(!ws||ws.readyState!==WebSocket.OPEN) pollMetrics(); }, dashboardPollIntervalMs);
+  setInterval(loadErrors, 10000);
+})();
+</script>
+</body>
+</html>

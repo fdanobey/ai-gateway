@@ -1,0 +1,1685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OBEY-API Admin Panel</title>
+<link rel="icon" type="image/x-icon" href="icon.ico">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#f8f9fa;--surface:#fff;--border:#dee2e6;--text:#212529;--text-muted:#6c757d;
+--primary:#0d6efd;--primary-hover:#0b5ed7;--danger:#dc3545;--success:#198754;
+--nav-bg:#1e293b;--nav-text:#e2e8f0;--nav-active:#3b82f6;--radius:6px;--shadow:0 1px 3px rgba(0,0,0,.1)}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.5;display:flex;min-height:100vh}
+a{color:var(--primary);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* Nav */
+nav{width:220px;background:var(--nav-bg);color:var(--nav-text);padding:1rem 0;flex-shrink:0;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+nav h1{font-size:1rem;padding:0 1rem 1rem;border-bottom:1px solid rgba(255,255,255,.1);margin-bottom:.5rem;display:flex;align-items:center;gap:.5rem}
+nav h1 img{width:24px;height:24px;border-radius:4px}
+nav ul{list-style:none}
+nav li{margin:0}
+nav button.nav-btn{display:block;width:100%;text-align:left;background:none;border:none;color:var(--nav-text);
+padding:.6rem 1rem;font-size:.875rem;cursor:pointer;transition:background .15s}
+nav button.nav-btn:hover,nav button.nav-btn:focus-visible{background:rgba(255,255,255,.08);outline:none}
+nav button.nav-btn[aria-selected="true"]{background:var(--nav-active);color:#fff;font-weight:600}
+nav .nav-footer{margin-top:auto;padding:1rem;border-top:1px solid rgba(255,255,255,.1);font-size:.75rem}
+nav .nav-footer a{color:var(--nav-text);opacity:.7}
+nav .nav-footer a:hover{opacity:1}
+
+/* Main */
+main{flex:1;padding:2rem;max-width:900px}
+main h2{font-size:1.25rem;margin-bottom:1.5rem;padding-bottom:.5rem;border-bottom:2px solid var(--primary)}
+
+/* Page sections */
+.page{display:none}
+.page.active{display:block}
+
+/* Forms */
+.form-group{margin-bottom:1rem}
+.form-group label{display:block;font-weight:600;font-size:.875rem;margin-bottom:.25rem}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:.5rem .75rem;border:1px solid var(--border);
+border-radius:var(--radius);font-size:.875rem;background:var(--surface);color:var(--text);transition:border-color .15s}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(13,110,253,.15)}
+.form-group .hint{font-size:.75rem;color:var(--text-muted);margin-top:.15rem}
+.form-group .error{font-size:.75rem;color:var(--danger);margin-top:.15rem;display:none}
+.form-group .error.visible{display:block}
+.form-group input.field-invalid,.form-group select.field-invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(220,53,69,.15)}
+
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media(max-width:600px){.form-row{grid-template-columns:1fr}}
+
+fieldset{border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;background:var(--surface)}
+legend{font-weight:600;font-size:.875rem;padding:0 .5rem}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:.4rem;padding:.5rem 1rem;border:none;border-radius:var(--radius);
+font-size:.875rem;font-weight:500;cursor:pointer;transition:background .15s}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-hover)}
+.btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{background:var(--bg)}
+.btn-danger{background:var(--danger);color:#fff}
+.btn-danger:hover{background:#bb2d3b}
+.btn-sm{padding:.3rem .6rem;font-size:.8rem}
+.actions{display:flex;gap:.5rem;margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border)}
+
+/* Dynamic list */
+  .item-list{margin-bottom:1rem}
+  .item-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:.5rem;
+  box-shadow:var(--shadow)}
+  .item-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem}
+  .item-card-header strong{font-size:.9rem}
+  .secret-status{margin-top:.35rem;font-size:.75rem;padding:.4rem .55rem;border-radius:var(--radius);border:1px solid var(--border)}
+  .secret-status.status-encrypted{background:rgba(25,135,84,.08);border-color:rgba(25,135,84,.25);color:var(--success)}
+  .secret-status.status-plaintext{background:rgba(220,53,69,.08);border-color:rgba(220,53,69,.25);color:var(--danger)}
+  .secret-status.status-environment{background:rgba(13,110,253,.08);border-color:rgba(13,110,253,.2);color:var(--primary)}
+  .secret-status.status-missing{background:rgba(108,117,125,.08);border-color:rgba(108,117,125,.18);color:var(--text-muted)}
+
+  /* Drag-and-drop for model rows */
+  .models-container .form-row{position:relative;transition:transform .15s ease,box-shadow .15s ease;
+  display:grid;grid-template-columns:auto auto 1fr 1fr auto auto auto;gap:.5rem;align-items:end;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem;margin-bottom:.5rem}
+  .models-container .form-row.draggable{cursor:grab}
+  .models-container .form-row.dragging{opacity:.4;cursor:grabbing}
+  .models-container .form-row.drag-over-top{border-top:2px solid var(--primary);margin-top:-2px}
+  .models-container .form-row.drag-over-bottom{border-bottom:2px solid var(--primary);margin-bottom:-2px}
+  .drag-handle{cursor:grab;color:var(--text-muted);font-size:1.1rem;user-select:none;display:flex;align-items:center;
+  padding:0 .15rem;align-self:center}
+  .drag-handle:hover{color:var(--text)}
+  .drag-handle:active{cursor:grabbing}
+  .priority-badge{display:inline-flex;align-items:center;justify-content:center;background:var(--primary);color:#fff;border-radius:999px;
+  font-size:.7rem;font-weight:600;width:1.4rem;height:1.4rem;flex-shrink:0;align-self:center}
+
+/* Checkbox */
+.form-check{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem}
+.form-check input[type="checkbox"]{width:1rem;height:1rem;accent-color:var(--primary)}
+.form-check label{font-weight:400;font-size:.875rem;margin:0}
+
+/* Bedrock fields */
+.bedrock-fields{display:none;border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:.75rem;background:var(--surface)}
+.bedrock-fields .bedrock-title{font-weight:600;font-size:.875rem;margin-bottom:.75rem;color:var(--text)}
+.bedrock-fields .prov-url-bedrock{position:relative}
+.bedrock-fields .prov-url-bedrock .lock-icon{position:absolute;right:.6rem;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:.8rem;pointer-events:none}
+.bedrock-fields .info-note{font-size:.75rem;color:var(--text-muted);margin-top:.15rem}
+
+/* Warning (non-blocking) */
+.form-group .warning{font-size:.75rem;color:#856404;background:#fff3cd;border:1px solid #ffeeba;border-radius:var(--radius);padding:.35rem .55rem;margin-top:.25rem;display:none}
+.form-group .warning.visible{display:block}
+
+/* Status bar */
+.status-bar{position:fixed;bottom:0;left:220px;right:0;background:var(--surface);border-top:1px solid var(--border);
+padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify-content:space-between;z-index:10}
+.status-bar .status-msg{transition:opacity .3s}
+
+/* Responsive */
+@media(max-width:768px){
+  nav{width:180px}
+  main{padding:1rem}
+  .status-bar{left:180px}
+}
+</style>
+</head>
+<body>
+
+<nav aria-label="Admin navigation">
+  <h1><img src="menu_logo.jpg" alt="">OBEY-API Admin</h1>
+  <ul role="tablist" id="nav-tabs">
+    <li role="presentation"><button class="nav-btn" role="tab" aria-selected="true" data-page="server" id="tab-server" aria-controls="page-server">Server Settings</button></li>
+    <li role="presentation"><button class="nav-btn" role="tab" aria-selected="false" data-page="providers" id="tab-providers" aria-controls="page-providers">Providers</button></li>
+    <li role="presentation"><button class="nav-btn" role="tab" aria-selected="false" data-page="model-groups" id="tab-model-groups" aria-controls="page-model-groups">Model Groups</button></li>
+    <li role="presentation"><button class="nav-btn" role="tab" aria-selected="false" data-page="routing" id="tab-routing" aria-controls="page-routing">Routing Settings</button></li>
+    <li role="presentation"><button class="nav-btn" role="tab" aria-selected="false" data-page="circuit-breaker" id="tab-circuit-breaker" aria-controls="page-circuit-breaker">Circuit Breaker</button></li>
+    <li role="presentation"><button class="nav-btn" role="tab" aria-selected="false" data-page="logging" id="tab-logging" aria-controls="page-logging">Logging</button></li>
+    <li role="presentation"><button class="nav-btn" role="tab" aria-selected="false" data-page="caching" id="tab-caching" aria-controls="page-caching">Caching</button></li>
+    <li role="presentation"><button class="nav-btn" role="tab" aria-selected="false" data-page="context" id="tab-context" aria-controls="page-context">Context</button></li>
+  </ul>
+  <div class="nav-footer">
+    <a href="/dashboard" id="dashboard-link">Open Dashboard &rarr;</a>
+  </div>
+</nav>
+
+<main>
+  <!-- Server Settings (Req 13.3) -->
+  <section class="page active" id="page-server" role="tabpanel" aria-labelledby="tab-server">
+    <h2>Server Settings</h2>
+    <fieldset><legend>Network</legend>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="srv-host">Host</label>
+          <input type="text" id="srv-host" value="127.0.0.1" autocomplete="off">
+          <div class="hint">Bind address (e.g. 0.0.0.0 for all interfaces)</div>
+        </div>
+        <div class="form-group">
+          <label for="srv-port">Port</label>
+          <input type="number" id="srv-port" value="3000" min="1" max="65535" aria-describedby="srv-port-error">
+          <div class="hint">1–65535</div>
+          <div class="error" id="srv-port-error" role="alert"></div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="srv-timeout">Request Timeout (seconds)</label>
+          <input type="number" id="srv-timeout" value="30" min="1" aria-describedby="srv-timeout-error">
+          <div class="error" id="srv-timeout-error" role="alert"></div>
+        </div>
+        <div class="form-group">
+          <label for="srv-max-body">Max Request Size (MB)</label>
+          <input type="number" id="srv-max-body" value="10" min="1" aria-describedby="srv-max-body-error">
+          <div class="error" id="srv-max-body-error" role="alert"></div>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset><legend>TLS</legend>
+      <div class="form-check">
+        <input type="checkbox" id="tls-enabled">
+        <label for="tls-enabled">Enable TLS/HTTPS</label>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="tls-cert">Certificate Path</label>
+          <input type="text" id="tls-cert" placeholder="/path/to/cert.pem">
+        </div>
+        <div class="form-group">
+          <label for="tls-key">Key Path</label>
+          <input type="text" id="tls-key" placeholder="/path/to/key.pem">
+        </div>
+      </div>
+    </fieldset>
+    <fieldset><legend>Admin Panel</legend>
+      <div class="form-group">
+        <label for="admin-path">Admin Path</label>
+        <input type="text" id="admin-path" value="/admin">
+      </div>
+      <div class="form-check">
+        <input type="checkbox" id="admin-auth-enabled">
+        <label for="admin-auth-enabled">Enable Authentication</label>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="admin-user-env">Username Env Variable</label>
+          <input type="text" id="admin-user-env" placeholder="ADMIN_USERNAME">
+        </div>
+        <div class="form-group">
+          <label for="admin-pass-env">Password Env Variable</label>
+          <input type="text" id="admin-pass-env" placeholder="ADMIN_PASSWORD">
+        </div>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button class="btn btn-primary" data-action="save">Save</button>
+      <button class="btn btn-secondary" data-action="reset">Reset</button>
+      <button class="btn btn-secondary" data-action="reload">Reload Config</button>
+      <button class="btn btn-secondary" data-action="export">Export YAML</button>
+      <button class="btn btn-secondary" data-action="import">Import YAML</button>
+    </div>
+  </section>
+
+  <!-- Providers (Req 13.4) -->
+  <section class="page" id="page-providers" role="tabpanel" aria-labelledby="tab-providers">
+    <h2>Providers</h2>
+    <div class="item-list" id="providers-list"></div>
+    <button class="btn btn-primary" id="add-provider">+ Add Provider</button>
+    <template id="tpl-provider">
+      <div class="item-card" data-provider-idx="">
+        <div class="item-card-header">
+          <strong class="provider-title">New Provider</strong>
+          <button class="btn btn-danger btn-sm remove-provider">Remove</button>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Name</label>
+            <input type="text" class="prov-name" placeholder="my-openai" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>Type</label>
+            <select class="prov-type">
+              <option value="openai">OpenAI</option>
+              <option value="ollama">Ollama</option>
+              <option value="bedrock">AWS Bedrock</option>
+              <option value="groq">Groq</option>
+              <option value="together">Together AI</option>
+              <option value="vllm">vLLM</option>
+              <option value="lmstudio">LM Studio</option>
+              <option value="nvidia_nim">NVIDIA NIM</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Base URL</label>
+            <input type="url" class="prov-url" placeholder="https://api.openai.com">
+          </div>
+          <div class="form-group">
+            <label>API Key or Env Variable</label>
+            <input type="text" class="prov-key-env" placeholder="sk-... or OPENAI_API_KEY" autocomplete="off">
+            <div class="hint">Plaintext keys are encrypted on save. Leave blank to keep an existing encrypted key.</div>
+            <div class="secret-status status-missing prov-key-status">No API key configured.</div>
+            <div class="warning prov-key-warning" role="status"></div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Timeout (seconds)</label>
+            <input type="number" class="prov-timeout" value="30" min="1">
+          </div>
+          <div class="form-group">
+            <label>Rate Limit (req/min, 0=unlimited)</label>
+            <input type="number" class="prov-rate" value="0" min="0">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Max Connections</label>
+            <input type="number" class="prov-max-conn" value="100" min="1">
+          </div>
+          <div class="form-group"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Pool Max Idle Per Host</label>
+            <input type="number" class="prov-pool-max-idle" value="10" min="1">
+            <div class="hint">Reusable idle keep-alive connections per provider host</div>
+          </div>
+          <div class="form-group">
+            <label>Pool Idle Timeout (seconds)</label>
+            <input type="number" class="prov-pool-idle-timeout" value="90" min="1">
+            <div class="hint">Idle pooled connection lifetime</div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Budget Limit (USD, blank = none)</label>
+            <input type="number" class="prov-budget-limit" min="0" step="0.01" placeholder="100.00">
+          </div>
+          <div class="form-group">
+            <label>Budget Reset Policy</label>
+            <select class="prov-budget-reset">
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:.5rem">
+          <label>Manual Models (one per line, always included in model lists)</label>
+          <textarea class="prov-manual-models" rows="2" placeholder="model-name-1&#10;model-name-2" style="font-size:.8rem;font-family:monospace"></textarea>
+          <div class="hint">Use when provider doesn't expose /v1/models (e.g. NVIDIA NIM cloud)</div>
+        </div>
+        <div class="bedrock-fields">
+          <div class="bedrock-title">AWS Bedrock Settings</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Region</label>
+              <select class="prov-region" aria-describedby="">
+                <option value="" disabled>-- select region --</option>
+                <option value="us-east-1" selected>us-east-1</option>
+                <option value="us-west-2">us-west-2</option>
+                <option value="eu-west-1">eu-west-1</option>
+                <option value="eu-west-3">eu-west-3</option>
+                <option value="eu-central-1">eu-central-1</option>
+                <option value="ap-northeast-1">ap-northeast-1</option>
+                <option value="ap-southeast-1">ap-southeast-1</option>
+                <option value="ap-southeast-2">ap-southeast-2</option>
+                <option value="ap-south-1">ap-south-1</option>
+                <option value="sa-east-1">sa-east-1</option>
+                <option value="ca-central-1">ca-central-1</option>
+                <option value="us-gov-west-1">us-gov-west-1</option>
+              </select>
+              <div class="error" role="alert"></div>
+            </div>
+            <div class="form-group">
+              <label>Base URL</label>
+              <div class="prov-url-bedrock">
+                <input type="url" class="prov-bedrock-url" value="https://bedrock-mantle.us-east-1.api.aws/v1" readonly>
+                <span class="lock-icon" aria-hidden="true">&#x1F512;</span>
+              </div>
+              <div class="info-note">Auto-generated from region. Cannot be edited directly.</div>
+              <div class="error" role="alert"></div>
+            </div>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" class="prov-global-inference">
+            <label>Enable Global Inference Profile</label>
+          </div>
+          <div class="info-note" style="margin-top:-.5rem;margin-bottom:.75rem">Routes requests across regions using model ID prefixes (e.g. us.anthropic.claude-3-5-sonnet).</div>
+          <div class="form-check">
+            <input type="checkbox" class="prov-prompt-caching">
+            <label>Enable Prompt Caching</label>
+          </div>
+          <div class="info-note" style="margin-top:-.5rem;margin-bottom:.75rem">Supported on Claude 3.5+ models. Reduces latency for repeated prompts.</div>
+          <div class="form-check">
+            <input type="checkbox" class="prov-reasoning" checked>
+            <label>Enable Reasoning Mode</label>
+          </div>
+          <div class="info-note" style="margin-top:-.5rem;margin-bottom:.75rem">Enables extended thinking for supported models (Claude 3.5 Sonnet v2+).</div>
+          <button type="button" class="btn btn-secondary btn-sm btn-refresh-models" style="margin-top:.5rem">Refresh Models</button>
+        </div>
+        <div style="margin-top:.5rem">
+          <button class="btn btn-secondary btn-sm test-connection">Test Connection</button>
+          <span class="test-result" style="font-size:.8rem;margin-left:.5rem"></span>
+        </div>
+      </div>
+    </template>
+    <div class="actions">
+      <button class="btn btn-primary" data-action="save">Save</button>
+      <button class="btn btn-secondary" data-action="reset">Reset</button>
+    </div>
+  </section>
+
+  <!-- Model Groups (Req 13.5) -->
+  <section class="page" id="page-model-groups" role="tabpanel" aria-labelledby="tab-model-groups">
+    <h2>Model Groups</h2>
+    <div class="item-list" id="groups-list"></div>
+    <button class="btn btn-primary" id="add-group">+ Add Model Group</button>
+    <template id="tpl-group">
+      <div class="item-card" data-group-idx="">
+        <div class="item-card-header">
+          <strong class="group-title">New Group</strong>
+          <button class="btn btn-danger btn-sm remove-group">Remove</button>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Group Name</label>
+            <input type="text" class="grp-name" placeholder="gpt4-equivalent" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <div class="form-check" style="margin-top:1.4rem">
+              <input type="checkbox" class="grp-version-fallback">
+              <label>Enable Version Fallback</label>
+            </div>
+          </div>
+        </div>
+        <div class="models-container">
+          <strong style="font-size:.8rem;display:block;margin-bottom:.5rem">Models</strong>
+        </div>
+        <button class="btn btn-secondary btn-sm add-model" style="margin-top:.5rem">+ Add Model</button>
+      </div>
+    </template>
+    <template id="tpl-model">
+      <div class="form-row draggable" draggable="true">
+        <div class="drag-handle" title="Drag to reorder priority" aria-label="Drag to reorder">⠿</div>
+        <span class="priority-badge" title="Priority (determined by position)">1</span>
+        <div class="form-group" style="margin:0">
+          <label>Provider</label>
+          <select class="mdl-provider"><option value="">-- select --</option></select>
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>Model</label>
+          <select class="mdl-name"><option value="">-- select provider first --</option></select>
+        </div>
+        <input type="hidden" class="mdl-priority" value="0">
+        <div class="form-group" style="margin:0">
+          <label>Cost In ($/M tok)</label>
+          <input type="number" class="mdl-cost-in" value="0" min="0" step="0.01">
+        </div>
+        <div class="form-group" style="margin:0">
+          <label>Cost Out ($/M tok)</label>
+          <input type="number" class="mdl-cost-out" value="0" min="0" step="0.01">
+        </div>
+        <button class="btn btn-danger btn-sm remove-model" style="align-self:center" aria-label="Remove model">✕</button>
+      </div>
+    </template>
+    <div class="actions">
+      <button class="btn btn-primary" data-action="save">Save</button>
+      <button class="btn btn-secondary" data-action="reset">Reset</button>
+    </div>
+  </section>
+
+  <!-- Routing Settings (Req 13.6) -->
+  <section class="page" id="page-routing" role="tabpanel" aria-labelledby="tab-routing">
+    <h2>Routing Settings</h2>
+    <fieldset><legend>Retry Configuration</legend>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="retry-max">Max Retries Per Provider</label>
+          <input type="number" id="retry-max" value="1" min="0" max="10" aria-describedby="retry-max-error">
+          <div class="error" id="retry-max-error" role="alert"></div>
+        </div>
+        <div class="form-group">
+          <label for="retry-backoff">Initial Backoff (seconds)</label>
+          <input type="number" id="retry-backoff" value="1" min="0" step="0.5" aria-describedby="retry-backoff-error">
+          <div class="error" id="retry-backoff-error" role="alert"></div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="retry-multiplier">Backoff Multiplier</label>
+        <input type="number" id="retry-multiplier" value="2" min="1" step="0.5" aria-describedby="retry-multiplier-error">
+        <div class="hint">Each retry waits: initial × multiplier^attempt</div>
+        <div class="error" id="retry-multiplier-error" role="alert"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="retry-jitter-enabled">Retry Jitter</label>
+          <select id="retry-jitter-enabled">
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+          </select>
+          <div class="hint">Applies bounded randomness to retry delays</div>
+        </div>
+        <div class="form-group">
+          <label for="retry-jitter-ratio">Jitter Ratio</label>
+          <input type="number" id="retry-jitter-ratio" value="0.2" min="0" max="1" step="0.05" aria-describedby="retry-jitter-ratio-error">
+          <div class="hint">0.2 means ±20% around the configured retry backoff</div>
+          <div class="error" id="retry-jitter-ratio-error" role="alert"></div>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset><legend>CORS</legend>
+      <div class="form-check">
+        <input type="checkbox" id="cors-enabled">
+        <label for="cors-enabled">Enable CORS</label>
+      </div>
+      <div class="form-group">
+        <label for="cors-origins">Allowed Origins (comma-separated)</label>
+        <input type="text" id="cors-origins" placeholder="http://localhost:3000, https://app.example.com">
+      </div>
+      <div class="form-group">
+        <label for="cors-methods">Allowed Methods</label>
+        <input type="text" id="cors-methods" value="GET, POST, PUT, DELETE, OPTIONS">
+      </div>
+      <div class="form-group">
+        <label for="cors-headers">Allowed Headers</label>
+        <input type="text" id="cors-headers" value="Content-Type, Authorization">
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button class="btn btn-primary" data-action="save">Save</button>
+      <button class="btn btn-secondary" data-action="reset">Reset</button>
+    </div>
+  </section>
+
+  <!-- Circuit Breaker (Req 13.7) -->
+  <section class="page" id="page-circuit-breaker" role="tabpanel" aria-labelledby="tab-circuit-breaker">
+    <h2>Circuit Breaker</h2>
+    <fieldset><legend>Thresholds</legend>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="cb-threshold">Failure Threshold</label>
+          <input type="number" id="cb-threshold" value="1" min="1" aria-describedby="cb-threshold-error">
+          <div class="hint">Consecutive failures before opening circuit</div>
+          <div class="error" id="cb-threshold-error" role="alert"></div>
+        </div>
+        <div class="form-group">
+          <label for="cb-initial-backoff">Initial Backoff (seconds)</label>
+          <input type="number" id="cb-initial-backoff" value="5" min="1" aria-describedby="cb-initial-backoff-error">
+          <div class="error" id="cb-initial-backoff-error" role="alert"></div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="cb-max-backoff">Max Backoff (seconds)</label>
+          <input type="number" id="cb-max-backoff" value="300" min="1" aria-describedby="cb-max-backoff-error">
+          <div class="error" id="cb-max-backoff-error" role="alert"></div>
+        </div>
+        <div class="form-group">
+          <label for="cb-multiplier">Backoff Multiplier</label>
+          <input type="number" id="cb-multiplier" value="2" min="1" step="0.5" aria-describedby="cb-multiplier-error">
+          <div class="error" id="cb-multiplier-error" role="alert"></div>
+        </div>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button class="btn btn-primary" data-action="save">Save</button>
+      <button class="btn btn-secondary" data-action="reset">Reset</button>
+    </div>
+  </section>
+
+  <!-- Logging (Req 13.8) -->
+  <section class="page" id="page-logging" role="tabpanel" aria-labelledby="tab-logging">
+    <h2>Logging</h2>
+    <fieldset><legend>Request Logging</legend>
+      <div class="form-check">
+        <input type="checkbox" id="log-request-body">
+        <label for="log-request-body">Log Request Bodies</label>
+      </div>
+      <div class="form-check">
+        <input type="checkbox" id="log-response-body">
+        <label for="log-response-body">Log Response Bodies</label>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="log-max-body">Max Body Size (bytes)</label>
+          <input type="number" id="log-max-body" value="10240" min="0" aria-describedby="log-max-body-error">
+          <div class="error" id="log-max-body-error" role="alert"></div>
+        </div>
+        <div class="form-group">
+          <label for="log-db-path">Database Path</label>
+          <input type="text" id="log-db-path" placeholder="logs.db">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="log-excluded-fields">Excluded Fields (comma-separated)</label>
+        <input type="text" id="log-excluded-fields" placeholder="api_key, password">
+      </div>
+    </fieldset>
+    <fieldset><legend>Retention</legend>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="log-retention">Retention Period (days, 0=disabled)</label>
+          <input type="number" id="log-retention" value="30" min="0" aria-describedby="log-retention-error">
+          <div class="error" id="log-retention-error" role="alert"></div>
+        </div>
+        <div class="form-group">
+          <label for="log-cleanup">Cleanup Interval (hours)</label>
+          <input type="number" id="log-cleanup" value="24" min="1" aria-describedby="log-cleanup-error">
+          <div class="error" id="log-cleanup-error" role="alert"></div>
+        </div>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button class="btn btn-primary" data-action="save">Save</button>
+      <button class="btn btn-secondary" data-action="reset">Reset</button>
+    </div>
+  </section>
+
+  <!-- Caching (Req 13.9) -->
+  <section class="page" id="page-caching" role="tabpanel" aria-labelledby="tab-caching">
+    <h2>Caching</h2>
+    <fieldset><legend>Qdrant Connection</legend>
+      <div class="form-check">
+        <input type="checkbox" id="cache-enabled">
+        <label for="cache-enabled">Enable Semantic Cache</label>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="cache-qdrant-url">Qdrant URL</label>
+          <input type="url" id="cache-qdrant-url" placeholder="http://localhost:6334" aria-describedby="cache-qdrant-url-error">
+          <div class="error" id="cache-qdrant-url-error" role="alert"></div>
+        </div>
+        <div class="form-group">
+          <label for="cache-collection">Collection Name</label>
+          <input type="text" id="cache-collection" value="ai_gateway_cache">
+        </div>
+      </div>
+    </fieldset>
+    <fieldset><legend>Embedding</legend>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="cache-embed-provider">Embedding Provider</label>
+          <select id="cache-embed-provider"><option value="">-- select provider --</option></select>
+          <div class="hint">Must match a configured provider name</div>
+        </div>
+        <div class="form-group">
+          <label for="cache-embed-model">Embedding Model</label>
+          <select id="cache-embed-model"><option value="text-embedding-3-small" selected>text-embedding-3-small</option></select>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset><legend>Cache Behavior</legend>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="cache-threshold">Similarity Threshold (0.0–1.0)</label>
+          <input type="number" id="cache-threshold" value="0.95" min="0" max="1" step="0.01" aria-describedby="cache-threshold-error">
+          <div class="error" id="cache-threshold-error" role="alert"></div>
+        </div>
+        <div class="form-group">
+          <label for="cache-ttl">TTL (seconds, 0=no expiry)</label>
+          <input type="number" id="cache-ttl" value="3600" min="0" aria-describedby="cache-ttl-error">
+          <div class="error" id="cache-ttl-error" role="alert"></div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="cache-max-entries">Max Entries (0=unlimited)</label>
+        <input type="number" id="cache-max-entries" value="10000" min="0" aria-describedby="cache-max-entries-error">
+        <div class="error" id="cache-max-entries-error" role="alert"></div>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button class="btn btn-primary" data-action="save">Save</button>
+      <button class="btn btn-secondary" data-action="reset">Reset</button>
+    </div>
+  </section>
+
+  <!-- Context (Req 13.10) -->
+  <section class="page" id="page-context" role="tabpanel" aria-labelledby="tab-context">
+    <h2>Context Management</h2>
+    <fieldset><legend>Automatic Context Truncation</legend>
+      <div class="form-check">
+        <input type="checkbox" id="context-enabled">
+        <label for="context-enabled">Enable Automatic Context Truncation</label>
+      </div>
+      <div class="form-group">
+        <label for="context-strategy">Truncation Strategy</label>
+        <select id="context-strategy">
+          <option value="remove_oldest">Remove Oldest Messages</option>
+          <option value="sliding_window">Sliding Window</option>
+        </select>
+        <div class="hint" id="context-strategy-hint"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="context-window-size">Sliding Window Size (messages)</label>
+          <input type="number" id="context-window-size" value="10" min="1" max="100">
+          <div class="hint" id="context-window-size-hint"></div>
+        </div>
+        <div class="form-group">
+          <label for="context-cache-ttl">Model Capabilities Cache TTL (seconds)</label>
+          <input type="number" id="context-cache-ttl" value="3600" min="60" max="86400">
+          <div class="hint" id="context-cache-ttl-hint"></div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="context-max-retries">Max Truncation Retries</label>
+          <input type="number" id="context-max-retries" value="3" min="0" max="10">
+          <div class="hint" id="context-max-retries-hint"></div>
+        </div>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button class="btn btn-primary" data-action="save">Save</button>
+      <button class="btn btn-secondary" data-action="reset">Reset</button>
+    </div>
+  </section>
+</main>
+
+<div class="status-bar" role="status" aria-live="polite">
+  <span id="status-msg">Ready</span>
+  <span id="status-time"></span>
+</div>
+
+<script>
+"use strict";
+(function() {
+  var config = null;
+
+  // --- Bedrock Built-in Model Catalog (fallback when /v1/models is unreachable) ---
+  var BEDROCK_BUILTIN_MODELS = [
+    // Anthropic Claude 4.x family
+    'anthropic.claude-opus-4-7',
+    'anthropic.claude-sonnet-4-6',
+    'anthropic.claude-opus-4-6',
+    'anthropic.claude-sonnet-4-5-v2:0',
+    'anthropic.claude-opus-4-5-v1:0',
+    'anthropic.claude-haiku-4-5-20251001-v1:0',
+    'anthropic.claude-sonnet-4-v1:0',
+    'anthropic.claude-opus-4-v1:0',
+    // Anthropic Claude 3.x family
+    'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    'anthropic.claude-3-5-haiku-20241022-v1:0',
+    'anthropic.claude-3-opus-20240229-v1:0',
+    'anthropic.claude-3-sonnet-20240229-v1:0',
+    'anthropic.claude-3-haiku-20240307-v1:0',
+    // Amazon Nova
+    'amazon.nova-premier-v1:0',
+    'amazon.nova-pro-v1:0',
+    'amazon.nova-lite-v1:0',
+    'amazon.nova-micro-v1:0',
+    'amazon.titan-text-express-v1',
+    'amazon.titan-text-lite-v1',
+    // Meta Llama
+    'meta.llama4-maverick-17b-instruct-v1:0',
+    'meta.llama4-scout-17b-instruct-v1:0',
+    'meta.llama3-3-70b-instruct-v1:0',
+    'meta.llama3-1-405b-instruct-v1:0',
+    'meta.llama3-1-70b-instruct-v1:0',
+    'meta.llama3-1-8b-instruct-v1:0',
+    // DeepSeek
+    'deepseek.deepseek-r1-v1:0',
+    'deepseek.deepseek-v3-2-v1:0',
+    // Mistral
+    'mistral.mistral-large-2407-v1:0',
+    'mistral.mistral-large-3-v1:0',
+    'mistral.mistral-small-2402-v1:0',
+    // Cohere
+    'cohere.command-r-plus-v1:0',
+    'cohere.command-r-v1:0',
+    // Qwen
+    'qwen.qwen3-32b-v1:0'
+  ];
+
+  // Compute the admin API base path so fetch URLs work regardless of trailing slash.
+  // e.g. /admin or /admin/ both yield "/admin/"
+  var basePath = window.location.pathname.replace(/\/?$/, '/');
+  function apiUrl(endpoint) { return basePath + endpoint; }
+
+  // --- Tab Navigation ---
+  var tabs = document.querySelectorAll('[role="tab"]');
+  var pages = document.querySelectorAll('.page');
+
+  function switchPage(pageId) {
+    tabs.forEach(function(t) { t.setAttribute('aria-selected', 'false'); });
+    pages.forEach(function(p) { p.classList.remove('active'); });
+    var tab = document.querySelector('[data-page="' + pageId + '"]');
+    var page = document.getElementById('page-' + pageId);
+    if (tab) tab.setAttribute('aria-selected', 'true');
+    if (page) page.classList.add('active');
+  }
+
+  tabs.forEach(function(tab) {
+    tab.addEventListener('click', function() { switchPage(this.dataset.page); });
+    tab.addEventListener('keydown', function(e) {
+      var items = Array.from(tabs);
+      var idx = items.indexOf(this);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        var next = items[(idx + 1) % items.length];
+        next.focus(); next.click();
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        var prev = items[(idx - 1 + items.length) % items.length];
+        prev.focus(); prev.click();
+      }
+    });
+  });
+
+  // --- Status Bar ---
+  var statusEl = document.getElementById('status-msg');
+  var timeEl = document.getElementById('status-time');
+
+  function setStatus(msg) {
+    statusEl.textContent = msg;
+    timeEl.textContent = new Date().toLocaleTimeString();
+  }
+
+  // --- Validation Helpers (Req 13.11, 13.16) ---
+  // Uses textContent only (no innerHTML) for XSS safety.
+
+  /** Show an error on a field. Sets aria-invalid and makes the .error div visible. */
+  function showError(input, msg) {
+    input.classList.add('field-invalid');
+    input.setAttribute('aria-invalid', 'true');
+    var errEl = input.parentElement.querySelector('.error');
+    if (!errEl) {
+      errEl = document.createElement('div');
+      errEl.className = 'error';
+      errEl.setAttribute('role', 'alert');
+      input.parentElement.appendChild(errEl);
+    }
+    // Link via aria-describedby if the error div has an id
+    if (errEl.id) { input.setAttribute('aria-describedby', errEl.id); }
+    errEl.textContent = msg;
+    errEl.classList.add('visible');
+  }
+
+  /** Clear error state from a field. */
+  function clearError(input) {
+    input.classList.remove('field-invalid');
+    input.removeAttribute('aria-invalid');
+    var errEl = input.parentElement.querySelector('.error');
+    if (errEl) { errEl.textContent = ''; errEl.classList.remove('visible'); }
+  }
+
+  /** Clear all errors inside a container element. */
+  function clearAllErrors(container) {
+    container.querySelectorAll('.field-invalid').forEach(function(el) { clearError(el); });
+  }
+
+  /** Validate a port number (1-65535). Returns true if valid. */
+  function validatePort(input) {
+    var v = parseInt(input.value, 10);
+    if (isNaN(v) || v < 1 || v > 65535) { showError(input, 'Port must be between 1 and 65535'); return false; }
+    clearError(input); return true;
+  }
+
+  /** Validate a positive integer (>= 1). */
+  function validatePositiveInt(input, label) {
+    var v = parseInt(input.value, 10);
+    if (isNaN(v) || v < 1) { showError(input, (label || 'Value') + ' must be a positive integer'); return false; }
+    clearError(input); return true;
+  }
+
+  /** Validate a non-negative integer (>= 0). */
+  function validateNonNegativeInt(input, label) {
+    var v = parseInt(input.value, 10);
+    if (isNaN(v) || v < 0) { showError(input, (label || 'Value') + ' must be 0 or greater'); return false; }
+    clearError(input); return true;
+  }
+
+  /** Validate a non-negative number (>= 0, allows decimals). */
+  function validateNonNegativeNum(input, label) {
+    var v = parseFloat(input.value);
+    if (isNaN(v) || v < 0) { showError(input, (label || 'Value') + ' must be 0 or greater'); return false; }
+    clearError(input); return true;
+  }
+
+  /** Validate a positive number (> 0, allows decimals). */
+  function validatePositiveNum(input, label) {
+    var v = parseFloat(input.value);
+    if (isNaN(v) || v < 0.001) { showError(input, (label || 'Value') + ' must be a positive number'); return false; }
+    clearError(input); return true;
+  }
+
+  /** Validate a required text field (non-empty after trim). */
+  function validateRequired(input, label) {
+    if (!input.value.trim()) { showError(input, (label || 'This field') + ' is required'); return false; }
+    clearError(input); return true;
+  }
+
+  /** Validate a URL format (http:// or https://). */
+  function validateUrl(input, label) {
+    var v = input.value.trim();
+    if (!v) { clearError(input); return true; } // optional unless required separately
+    try { var u = new URL(v); if (u.protocol !== 'http:' && u.protocol !== 'https:') { throw 0; } }
+    catch(_) { showError(input, (label || 'URL') + ' must be a valid http(s) URL'); return false; }
+    clearError(input); return true;
+  }
+
+  /** Show a non-blocking warning on a field (does not prevent save). */
+  function showWarning(container, msg) {
+    var warnEl = container.querySelector('.warning');
+    if (!warnEl) {
+      warnEl = document.createElement('div');
+      warnEl.className = 'warning';
+      warnEl.setAttribute('role', 'status');
+      container.appendChild(warnEl);
+    }
+    warnEl.textContent = msg;
+    warnEl.classList.add('visible');
+  }
+
+  /** Clear warning from a container. */
+  function clearWarning(container) {
+    var warnEl = container.querySelector('.warning');
+    if (warnEl) { warnEl.textContent = ''; warnEl.classList.remove('visible'); }
+  }
+
+  /** Validate Bedrock Mantle URL format. Returns true if valid. */
+  function validateBedrockUrl(input, region) {
+    var v = input.value.trim();
+    var formGroup = input.closest('.form-group');
+    var errEl = formGroup ? formGroup.querySelector('.error') : null;
+    if (!v) {
+      input.classList.add('field-invalid');
+      input.setAttribute('aria-invalid', 'true');
+      if (errEl) { errEl.textContent = 'Bedrock base URL is required'; errEl.classList.add('visible'); }
+      return false;
+    }
+    var expected = 'https://bedrock-mantle.' + region + '.api.aws/v1';
+    var pattern = /^https:\/\/bedrock-mantle\.[a-z0-9-]+\.api\.aws\/v1$/;
+    if (!pattern.test(v) || v !== expected) {
+      input.classList.add('field-invalid');
+      input.setAttribute('aria-invalid', 'true');
+      if (errEl) { errEl.textContent = 'URL does not match expected Bedrock Mantle format'; errEl.classList.add('visible'); }
+      return false;
+    }
+    input.classList.remove('field-invalid');
+    input.removeAttribute('aria-invalid');
+    if (errEl) { errEl.textContent = ''; errEl.classList.remove('visible'); }
+    return true;
+  }
+
+  /** Validate similarity threshold (0.0 - 1.0). */
+  function validateThreshold(input) {
+    var v = parseFloat(input.value);
+    if (isNaN(v) || v < 0 || v > 1) { showError(input, 'Threshold must be between 0.0 and 1.0'); return false; }
+    clearError(input); return true;
+  }
+
+  // --- Auto-clear errors on input ---
+  document.addEventListener('input', function(e) {
+    var input = e.target;
+    if (input.classList.contains('field-invalid')) { clearError(input); }
+  });
+
+  // --- Page-specific validators ---
+  // Each returns true if the active page is valid.
+
+  function validateServerPage() {
+    var ok = true;
+    if (!validatePort(document.getElementById('srv-port'))) ok = false;
+    if (!validatePositiveInt(document.getElementById('srv-timeout'), 'Timeout')) ok = false;
+    if (!validatePositiveInt(document.getElementById('srv-max-body'), 'Max request size')) ok = false;
+    return ok;
+  }
+
+  function validateProvidersPage() {
+    var ok = true;
+    var cards = document.querySelectorAll('#providers-list .item-card');
+    cards.forEach(function(card) {
+      var nameIn = card.querySelector('.prov-name');
+      var typeIn = card.querySelector('.prov-type');
+      var urlIn = card.querySelector('.prov-url');
+      var timeoutIn = card.querySelector('.prov-timeout');
+      var rateIn = card.querySelector('.prov-rate');
+      var maxConnIn = card.querySelector('.prov-max-conn');
+      var poolMaxIdleIn = card.querySelector('.prov-pool-max-idle');
+      var poolIdleTimeoutIn = card.querySelector('.prov-pool-idle-timeout');
+      var budgetLimitIn = card.querySelector('.prov-budget-limit');
+      if (!validateRequired(nameIn, 'Provider name')) ok = false;
+      if (!validateRequired(typeIn, 'Provider type')) ok = false;
+      if (urlIn.value.trim() && !validateUrl(urlIn, 'Base URL')) ok = false;
+      if (!validatePositiveInt(timeoutIn, 'Timeout')) ok = false;
+      if (!validateNonNegativeInt(rateIn, 'Rate limit')) ok = false;
+      if (!validatePositiveInt(maxConnIn, 'Max connections')) ok = false;
+      if (!validatePositiveInt(poolMaxIdleIn, 'Pool max idle')) ok = false;
+      if (!validatePositiveInt(poolIdleTimeoutIn, 'Pool idle timeout')) ok = false;
+      if (budgetLimitIn.value.trim() && !validatePositiveNum(budgetLimitIn, 'Budget limit')) ok = false;
+
+      // --- Bedrock-specific validation (Req 9.1, 9.2, 9.3, 9.4) ---
+      var isBedrock = typeIn.value === 'bedrock';
+      var keyGroup = card.querySelector('.prov-key-env').closest('.form-group');
+      clearWarning(keyGroup);
+
+      if (isBedrock) {
+        var regionIn = card.querySelector('.prov-region');
+        var bedrockUrlIn = card.querySelector('.prov-bedrock-url');
+
+        // 9.1: Region is required for bedrock providers (blocking)
+        if (!regionIn.value) {
+          showError(regionIn, 'Region is required for Bedrock providers');
+          ok = false;
+        } else {
+          clearError(regionIn);
+        }
+
+        // 9.3: Base URL must match expected Mantle format (blocking)
+        if (regionIn.value && bedrockUrlIn) {
+          if (!validateBedrockUrl(bedrockUrlIn, regionIn.value)) {
+            ok = false;
+          }
+        }
+
+        // 9.2: Warn (non-blocking) if no API key configured
+        var apiKeyVal = card.querySelector('.prov-key-env').value.trim();
+        var hasStoredKey = card.dataset.apiKeyConfigured === 'true';
+        if (!apiKeyVal && !hasStoredKey) {
+          showWarning(keyGroup, 'No API key configured. Bedrock requires an API key or AWS credentials.');
+        }
+      }
+    });
+    return ok;
+  }
+
+  function validateModelGroupsPage() {
+    var ok = true;
+    var cards = document.querySelectorAll('#groups-list .item-card');
+    cards.forEach(function(card) {
+      var nameIn = card.querySelector('.grp-name');
+      if (!validateRequired(nameIn, 'Group name')) ok = false;
+      var modelRows = card.querySelectorAll('.models-container .form-row');
+      if (modelRows.length === 0) {
+        showError(nameIn, 'Group must have at least one model');
+        ok = false;
+      }
+      modelRows.forEach(function(row) {
+        var provIn = row.querySelector('.mdl-provider');
+        var mdlIn = row.querySelector('.mdl-name');
+        var costIn = row.querySelector('.mdl-cost-in');
+        var costOut = row.querySelector('.mdl-cost-out');
+        if (provIn && !validateRequired(provIn, 'Provider')) ok = false;
+        if (mdlIn && !validateRequired(mdlIn, 'Model')) ok = false;
+        if (costIn && !validateNonNegativeNum(costIn, 'Cost in')) ok = false;
+        if (costOut && !validateNonNegativeNum(costOut, 'Cost out')) ok = false;
+      });
+    });
+    return ok;
+  }
+
+  function validateRoutingPage() {
+    var ok = true;
+    if (!validateNonNegativeInt(document.getElementById('retry-max'), 'Max retries')) ok = false;
+    if (!validateNonNegativeNum(document.getElementById('retry-backoff'), 'Backoff')) ok = false;
+    if (!validatePositiveNum(document.getElementById('retry-multiplier'), 'Multiplier')) ok = false;
+    if (!validateNonNegativeNum(document.getElementById('retry-jitter-ratio'), 'Jitter ratio')) ok = false;
+    if (parseFloat(document.getElementById('retry-jitter-ratio').value) > 1) { showError(document.getElementById('retry-jitter-ratio'), 'Jitter ratio must be between 0 and 1'); ok = false; }
+    return ok;
+  }
+
+  function validateCircuitBreakerPage() {
+    var ok = true;
+    if (!validatePositiveInt(document.getElementById('cb-threshold'), 'Failure threshold')) ok = false;
+    if (!validatePositiveInt(document.getElementById('cb-initial-backoff'), 'Initial backoff')) ok = false;
+    if (!validatePositiveInt(document.getElementById('cb-max-backoff'), 'Max backoff')) ok = false;
+    if (!validatePositiveNum(document.getElementById('cb-multiplier'), 'Multiplier')) ok = false;
+    return ok;
+  }
+
+  function validateLoggingPage() {
+    var ok = true;
+    if (!validateNonNegativeInt(document.getElementById('log-max-body'), 'Max body size')) ok = false;
+    if (!validateNonNegativeInt(document.getElementById('log-retention'), 'Retention')) ok = false;
+    if (!validatePositiveInt(document.getElementById('log-cleanup'), 'Cleanup interval')) ok = false;
+    return ok;
+  }
+
+  function validateCachingPage() {
+    var enabled = document.getElementById('cache-enabled').checked;
+    if (!enabled) return true; // skip validation when cache disabled
+    var ok = true;
+    var urlIn = document.getElementById('cache-qdrant-url');
+    if (!validateRequired(urlIn, 'Qdrant URL')) ok = false;
+    else if (!validateUrl(urlIn, 'Qdrant URL')) ok = false;
+    if (!validateThreshold(document.getElementById('cache-threshold'))) ok = false;
+    if (!validateNonNegativeInt(document.getElementById('cache-ttl'), 'TTL')) ok = false;
+    if (!validateNonNegativeInt(document.getElementById('cache-max-entries'), 'Max entries')) ok = false;
+    return ok;
+  }
+
+  function validateContextPage() {
+    var ok = true;
+    if (!validatePositiveInt(document.getElementById('context-window-size'), 'Sliding window size')) ok = false;
+    if (!validatePositiveInt(document.getElementById('context-cache-ttl'), 'Cache TTL')) ok = false;
+    if (!validateNonNegativeInt(document.getElementById('context-max-retries'), 'Max retries')) ok = false;
+    return ok;
+  }
+
+    /** Map page id to its validator. */
+    var pageValidators = {
+        'page-server': validateServerPage,
+        'page-providers': validateProvidersPage,
+        'page-model-groups': validateModelGroupsPage,
+        'page-routing': validateRoutingPage,
+        'page-circuit-breaker': validateCircuitBreakerPage,
+        'page-logging': validateLoggingPage,
+        'page-caching': validateCachingPage,
+        'page-context': validateContextPage
+    };
+
+  /** Validate the currently active page. Returns true if valid. */
+  function validateActivePage() {
+    var activePage = document.querySelector('.page.active');
+    if (!activePage) return true;
+    var validator = pageValidators[activePage.id];
+    return validator ? validator() : true;
+  }
+
+  // --- Provider Names Helper ---
+  function getProviderNames() {
+    var names = [];
+    document.querySelectorAll('#providers-list .item-card .prov-name').forEach(function(el) {
+      var n = el.value.trim(); if (n) names.push(n);
+    });
+    return names;
+  }
+
+  function populateProviderSelects() {
+    var names = getProviderNames();
+    document.querySelectorAll('.mdl-provider').forEach(function(sel) {
+      var cur = sel.value;
+      sel.innerHTML = '<option value="">-- select --</option>' + names.map(function(n){return '<option value="'+n+'"'+(n===cur?' selected':'')+'>'+n+'</option>';}).join('');
+    });
+    var cacheSel = document.getElementById('cache-embed-provider');
+    if (cacheSel) {
+      var cur = cacheSel.value;
+      cacheSel.innerHTML = '<option value="">-- select provider --</option>' + names.map(function(n){return '<option value="'+n+'"'+(n===cur?' selected':'')+'>'+n+'</option>';}).join('');
+    }
+  }
+
+  document.getElementById('providers-list').addEventListener('input', function(e) {
+    if (e.target.classList.contains('prov-name')) populateProviderSelects();
+  });
+
+  // When embedding provider changes, fetch its models into the embedding model dropdown
+  document.getElementById('cache-embed-provider').addEventListener('change', function() {
+    var prov = this.value;
+    var mdlSel = document.getElementById('cache-embed-model');
+    if (prov) { fetchModelsForProvider(prov, mdlSel, mdlSel.value || ''); }
+    else { mdlSel.innerHTML = '<option value="">-- select provider first --</option>'; }
+  });
+
+  // --- Dynamic Lists: Providers ---
+  var provList = document.getElementById('providers-list');
+  var provTpl = document.getElementById('tpl-provider');
+
+  function isEnvVarReference(value) {
+    return /^[A-Z_][A-Z0-9_]*$/.test(value);
+  }
+
+  function renderProviderKeyStatus(card) {
+    var input = card.querySelector('.prov-key-env');
+    var statusEl = card.querySelector('.prov-key-status');
+    var value = input.value.trim();
+    var storedStatus = card.dataset.apiKeyStatus || 'missing';
+    var configured = card.dataset.apiKeyConfigured === 'true';
+
+    statusEl.className = 'secret-status prov-key-status';
+
+    if (value) {
+      if (isEnvVarReference(value)) {
+        statusEl.classList.add('status-environment');
+        statusEl.textContent = 'Uses environment variable reference and will not be encrypted.';
+      } else {
+        statusEl.classList.add('status-plaintext');
+        statusEl.textContent = 'Plaintext key entered. It will be encrypted when you save.';
+      }
+      return;
+    }
+
+    if (storedStatus === 'encrypted' && configured) {
+      statusEl.classList.add('status-encrypted');
+      statusEl.textContent = 'Encrypted key stored locally. Leave blank to keep it, or enter a new key to replace it.';
+      return;
+    }
+
+    if (storedStatus === 'environment' && configured) {
+      statusEl.classList.add('status-environment');
+      statusEl.textContent = 'Provider uses an environment variable reference.';
+      return;
+    }
+
+    if (storedStatus === 'plaintext' && configured) {
+      statusEl.classList.add('status-plaintext');
+      statusEl.textContent = 'Plaintext key detected. Saving will encrypt it.';
+      return;
+    }
+
+    statusEl.classList.add('status-missing');
+    statusEl.textContent = 'No API key configured.';
+  }
+
+  function addProviderCard(data) {
+    var clone = provTpl.content.cloneNode(true);
+    var card = clone.querySelector('.item-card');
+    var nameInput = card.querySelector('.prov-name');
+    var titleEl = card.querySelector('.provider-title');
+    var keyInput = card.querySelector('.prov-key-env');
+    card.dataset.apiKeyStatus = (data && data.api_key_status) || 'missing';
+    card.dataset.apiKeyConfigured = (data && data.api_key_configured) ? 'true' : 'false';
+    if (data) {
+      nameInput.value = data.name || ''; titleEl.textContent = data.name || 'New Provider';
+      card.querySelector('.prov-type').value = data.type || 'openai';
+      card.querySelector('.prov-url').value = data.base_url || '';
+      keyInput.value = data.api_key_env || '';
+      card.querySelector('.prov-timeout').value = data.timeout_seconds || 30;
+      card.querySelector('.prov-rate').value = data.rate_limit_per_minute || 0;
+      card.querySelector('.prov-max-conn').value = data.max_connections || 100;
+      card.querySelector('.prov-region').value = data.region || 'us-east-1';
+      card.querySelector('.prov-pool-max-idle').value = (data.connection_pool && data.connection_pool.max_idle_per_host) || 10;
+      card.querySelector('.prov-pool-idle-timeout').value = (data.connection_pool && data.connection_pool.idle_timeout_seconds) || 90;
+      card.querySelector('.prov-budget-limit').value = (data.budget && data.budget.limit_usd != null) ? data.budget.limit_usd : '';
+      card.querySelector('.prov-budget-reset').value = (data.budget && data.budget.reset_policy) || 'manual';
+      card.querySelector('.prov-manual-models').value = (data.manual_models || []).join('\n');
+      // Restore Bedrock-specific checkbox values (Req 8.2, 8.4)
+      if (data.type === 'bedrock') {
+        card.querySelector('.prov-global-inference').checked = !!data.global_inference_profile;
+        card.querySelector('.prov-prompt-caching').checked = !!data.prompt_caching;
+        card.querySelector('.prov-reasoning').checked = data.reasoning !== false;
+      }
+    }
+    nameInput.addEventListener('input', function() { titleEl.textContent = this.value || 'New Provider'; populateProviderSelects(); });
+    keyInput.addEventListener('input', function() { renderProviderKeyStatus(card); });
+    card.querySelector('.remove-provider').addEventListener('click', function() { card.remove(); populateProviderSelects(); });
+
+    // --- Bedrock visibility toggle & region-URL binding (Req 1.1, 1.2, 2.1, 2.2, 2.3) ---
+    var typeSelect = card.querySelector('.prov-type');
+    var bedrockFields = card.querySelector('.bedrock-fields');
+    var urlInput = card.querySelector('.prov-url');
+    var regionSelect = card.querySelector('.prov-region');
+    var bedrockUrlInput = card.querySelector('.prov-bedrock-url');
+
+    function buildMantleUrl(region) {
+      return 'https://bedrock-mantle.' + region + '.api.aws/v1';
+    }
+
+    function syncBedrockVisibility() {
+      var isBedrock = typeSelect.value === 'bedrock';
+      bedrockFields.style.display = isBedrock ? 'block' : 'none';
+      if (isBedrock) {
+        // Ensure region has a valid value (default to us-east-1)
+        if (!regionSelect.value) {
+          regionSelect.value = 'us-east-1';
+        }
+        var region = regionSelect.value || 'us-east-1';
+        var mantleUrl = buildMantleUrl(region);
+        bedrockUrlInput.value = mantleUrl;
+        urlInput.value = mantleUrl;
+        urlInput.readOnly = true;
+        // Hide the generic Base URL row for bedrock since the bedrock-fields section has its own
+        urlInput.closest('.form-group').style.display = 'none';
+      } else {
+        urlInput.readOnly = false;
+        urlInput.closest('.form-group').style.display = '';
+      }
+    }
+
+    typeSelect.addEventListener('change', syncBedrockVisibility);
+
+    regionSelect.addEventListener('change', function() {
+      if (typeSelect.value === 'bedrock') {
+        var mantleUrl = buildMantleUrl(regionSelect.value);
+        bedrockUrlInput.value = mantleUrl;
+        urlInput.value = mantleUrl;
+      }
+    });
+
+    // Apply initial visibility state
+    syncBedrockVisibility();
+
+    // --- Wire "Refresh Models" button for Bedrock (Req 5.1, 5.5) ---
+    card.querySelector('.btn-refresh-models').addEventListener('click', function() {
+      var region = regionSelect.value || 'us-east-1';
+      var apiKey = card.querySelector('.prov-key-env').value.trim();
+      var globalInference = card.querySelector('.prov-global-inference').checked;
+      var manualModels = card.querySelector('.prov-manual-models').value.split('\n').map(function(s){return s.trim();}).filter(Boolean);
+      // Find or create a model select in the card for preview; use the manual-models textarea area
+      // For bedrock, populate the manual_models textarea with discovered models as a convenience
+      var tempSelect = card.querySelector('.bedrock-model-select');
+      if (!tempSelect) {
+        tempSelect = document.createElement('select');
+        tempSelect.className = 'bedrock-model-select';
+        tempSelect.style.cssText = 'width:100%;padding:.5rem .75rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.875rem;margin-top:.5rem';
+        card.querySelector('.btn-refresh-models').insertAdjacentElement('afterend', tempSelect);
+      }
+      fetchModelsForBedrock(region, apiKey, globalInference, tempSelect, '', manualModels);
+      setStatus('Fetching Bedrock models for ' + region + '…');
+    });
+
+    card.querySelector('.test-connection').addEventListener('click', function() {
+      var url = card.querySelector('.prov-url').value.trim();
+      var name = card.querySelector('.prov-name').value.trim();
+      var resultEl = card.querySelector('.test-result');
+      var testBtn = card.querySelector('.test-connection');
+      var isBedrock = typeSelect.value === 'bedrock';
+      // For bedrock, generate URL from region if the generic field is empty
+      if (!url && isBedrock) {
+        var region = regionSelect.value || 'us-east-1';
+        url = 'https://bedrock-mantle.' + region + '.api.aws/v1';
+      }
+      if (!url) { resultEl.textContent = '⚠ No base URL'; resultEl.style.color = 'var(--danger)'; return; }
+      resultEl.textContent = 'Testing…'; resultEl.style.color = 'var(--text-muted)';
+      testBtn.disabled = true;
+
+      if (isBedrock) {
+        // Bedrock: proxy through backend to avoid CORS (Req 10.1–10.4)
+        var region = regionSelect.value || 'us-east-1';
+        var apiKey = card.querySelector('.prov-key-env').value.trim();
+        var mantleBase = 'https://bedrock-mantle.' + region + '.api.aws/v1';
+        var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(mantleBase) + '&api_key=' + encodeURIComponent(apiKey || '');
+        fetch(proxyUrl, {
+          method: 'GET',
+          signal: AbortSignal.timeout(10000)
+        }).then(function(resp) {
+          if (resp.ok) {
+            resultEl.textContent = '✓ Reachable'; resultEl.style.color = 'var(--success)';
+            setStatus('Connection test passed for ' + name);
+          } else if (resp.status === 401 || resp.status === 403) {
+            resultEl.textContent = '✕ Unreachable (auth failed)'; resultEl.style.color = 'var(--danger)';
+            setStatus('Connection test auth failed for ' + name);
+          } else {
+            resultEl.textContent = '✕ Unreachable'; resultEl.style.color = 'var(--danger)';
+            setStatus('Connection test failed for ' + name + ': HTTP ' + resp.status);
+          }
+        }).catch(function(err) {
+          resultEl.textContent = '✕ Unreachable'; resultEl.style.color = 'var(--danger)';
+          setStatus('Connection test failed: ' + err.message);
+        }).finally(function() {
+          testBtn.disabled = false;
+        });
+      } else {
+        // Non-bedrock: proxy through backend to avoid CORS with 10s timeout
+        var provApiKey = card.querySelector('.prov-key-env').value.trim();
+        var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(url) + '&api_key=' + encodeURIComponent(provApiKey || '');
+        fetch(proxyUrl, { method: 'GET', signal: AbortSignal.timeout(10000) })
+          .then(function(resp) {
+            if (resp.ok) { resultEl.textContent = '✓ Reachable'; resultEl.style.color = 'var(--success)'; setStatus('Connection test passed for ' + name); }
+            else { resultEl.textContent = '✕ Unreachable'; resultEl.style.color = 'var(--danger)'; setStatus('Connection test failed for ' + name + ': HTTP ' + resp.status); }
+          })
+          .catch(function(err) { resultEl.textContent = '✕ Unreachable'; resultEl.style.color = 'var(--danger)'; setStatus('Connection test failed: ' + err.message); })
+          .finally(function() { testBtn.disabled = false; });
+      }
+    });
+    renderProviderKeyStatus(card);
+    provList.appendChild(clone);
+  }
+
+  document.getElementById('add-provider').addEventListener('click', function() { addProviderCard(null); setStatus('Provider added'); });
+
+  // --- Dynamic Lists: Model Groups ---
+  var grpList = document.getElementById('groups-list');
+  var grpTpl = document.getElementById('tpl-group');
+  var mdlTpl = document.getElementById('tpl-model');
+
+  function getProviderBaseUrl(providerName) {
+    var card = null;
+    document.querySelectorAll('#providers-list .item-card').forEach(function(c) {
+      if (c.querySelector('.prov-name').value.trim() === providerName) card = c;
+    });
+    if (!card) return '';
+    var url = card.querySelector('.prov-url').value.trim();
+    // For bedrock providers, generate the Mantle URL from region if base_url is empty
+    if (!url && card.querySelector('.prov-type').value === 'bedrock') {
+      var region = card.querySelector('.prov-region').value || 'us-east-1';
+      url = 'https://bedrock-mantle.' + region + '.api.aws/v1';
+    }
+    return url;
+  }
+
+  function getProviderApiKey(providerName) {
+    var card = null;
+    document.querySelectorAll('#providers-list .item-card').forEach(function(c) {
+      if (c.querySelector('.prov-name').value.trim() === providerName) card = c;
+    });
+    return card ? (card.querySelector('.prov-key-env').value.trim() || '') : '';
+  }
+
+  function getProviderType(providerName) {
+    var card = null;
+    document.querySelectorAll('#providers-list .item-card').forEach(function(c) {
+      if (c.querySelector('.prov-name').value.trim() === providerName) card = c;
+    });
+    return card ? card.querySelector('.prov-type').value : '';
+  }
+
+  function getManualModelsForProvider(providerName) {
+    var mm = [];
+    document.querySelectorAll('#providers-list .item-card').forEach(function(c) {
+      if (c.querySelector('.prov-name').value.trim() === providerName) {
+        var ta = c.querySelector('.prov-manual-models');
+        if (ta) mm = ta.value.split('\n').map(function(s){return s.trim();}).filter(Boolean);
+      }
+    });
+    return mm;
+  }
+
+  function fetchModelsForProvider(providerName, selectEl, currentModel) {
+    var baseUrl = getProviderBaseUrl(providerName);
+    var manualModels = getManualModelsForProvider(providerName);
+    var provType = getProviderType(providerName);
+
+    // Helper: populate select with a list of models
+    function populateSelect(models) {
+      manualModels.forEach(function(m) { if (models.indexOf(m) === -1) models.push(m); });
+      models.sort();
+      if (!models.length) { selectEl.innerHTML = '<option value="">-- no models found --</option>'; return; }
+      var opts = '<option value="">-- select model --</option>';
+      models.forEach(function(m) { opts += '<option value="'+m+'"'+(m===currentModel?' selected':'')+'>'+m+'</option>'; });
+      selectEl.innerHTML = opts;
+    }
+
+    if (!baseUrl) {
+      // For bedrock with no base URL, use built-in catalog
+      if (provType === 'bedrock') { populateSelect(BEDROCK_BUILTIN_MODELS.slice()); return; }
+      if (manualModels.length) { populateSelect([]); return; }
+      selectEl.innerHTML = '<option value="">-- no base URL --</option>';
+      return;
+    }
+    selectEl.innerHTML = '<option value="">Loading…</option>';
+    // Proxy through backend to avoid CORS issues with external provider APIs
+    var apiKey = getProviderApiKey(providerName);
+    var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(baseUrl) + '&api_key=' + encodeURIComponent(apiKey || '');
+    fetch(proxyUrl, { signal: AbortSignal.timeout(12000) })
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(data) {
+        var models = (data.data || []).map(function(m) { return m.id || m.name || ''; }).filter(Boolean);
+        // If API returned nothing for bedrock, use built-in catalog
+        if (!models.length && provType === 'bedrock') models = BEDROCK_BUILTIN_MODELS.slice();
+        populateSelect(models);
+      })
+      .catch(function() {
+        // For bedrock, fall back to built-in catalog
+        if (provType === 'bedrock') { populateSelect(BEDROCK_BUILTIN_MODELS.slice()); return; }
+        if (manualModels.length) { populateSelect([]); return; }
+        // Fallback: replace select with text input for manual model entry
+        var textInput = document.createElement('input');
+        textInput.type = 'text';
+        textInput.className = 'mdl-name';
+        textInput.placeholder = 'Type model name (e.g. meta/llama-3.1-8b-instruct)';
+        textInput.value = currentModel || '';
+        textInput.style.cssText = selectEl.style.cssText;
+        if (selectEl.parentNode) {
+          selectEl.parentNode.replaceChild(textInput, selectEl);
+        } else {
+          selectEl.innerHTML = '<option value="' + (currentModel || '') + '">' + (currentModel || 'Type model name') + '</option>';
+        }
+      });
+  }
+
+  // --- Bedrock Region Group Prefix (Req 4.3, 4.4) ---
+  function getBedrockRegionPrefix(region) {
+    var regionMap = {
+      'us-east-1': 'us.', 'us-west-2': 'us.',
+      'eu-west-1': 'eu.', 'eu-west-3': 'eu.', 'eu-central-1': 'eu.',
+      'ap-northeast-1': 'ap.', 'ap-southeast-1': 'ap.', 'ap-southeast-2': 'ap.', 'ap-south-1': 'ap.'
+    };
+    return regionMap[region] || '';
+  }
+
+  // --- Bedrock Model Auto-Discovery (Req 5.1, 5.2, 5.3, 5.4, 5.5) ---
+  function fetchModelsForBedrock(region, apiKey, globalInference, selectEl, currentModel, manualModels) {
+    var mantleBase = 'https://bedrock-mantle.' + region + '.api.aws/v1';
+    selectEl.innerHTML = '<option value="">Loading…</option>';
+
+    // Proxy through backend to avoid CORS issues
+    var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(mantleBase) + '&api_key=' + encodeURIComponent(apiKey || '');
+    fetch(proxyUrl, { signal: AbortSignal.timeout(12000) })
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(data) {
+        var models = (data.data || []).map(function(m) { return m.id || m.name || ''; }).filter(Boolean);
+        if (!models.length) throw new Error('empty');
+        populateBedrockModelSelect(models, globalInference, region, selectEl, currentModel, manualModels);
+      })
+      .catch(function() {
+        // Fall back to built-in catalog
+        populateBedrockModelSelect(BEDROCK_BUILTIN_MODELS.slice(), globalInference, region, selectEl, currentModel, manualModels);
+      });
+  }
+
+  function populateBedrockModelSelect(models, globalInference, region, selectEl, currentModel, manualModels) {
+    // Optionally prefix with region group for global inference
+    if (globalInference) {
+      var prefix = getBedrockRegionPrefix(region);
+      if (prefix) {
+        models = models.map(function(m) {
+          return m.indexOf(prefix) === 0 ? m : prefix + m;
+        });
+      }
+    }
+    // Merge with manual_models, deduplicate, sort
+    (manualModels || []).forEach(function(m) {
+      if (m && models.indexOf(m) === -1) models.push(m);
+    });
+    models.sort();
+    if (!models.length) { selectEl.innerHTML = '<option value="">-- no models found --</option>'; return; }
+    var opts = '<option value="">-- select model --</option>';
+    models.forEach(function(m) { opts += '<option value="'+m+'"'+(m===currentModel?' selected':'')+'>'+m+'</option>'; });
+    selectEl.innerHTML = opts;
+  }
+
+  function addModelRow(container, data) {
+    var clone = mdlTpl.content.cloneNode(true);
+    var row = clone.querySelector('.form-row');
+    if (data) {
+      row.querySelector('.mdl-cost-in').value = data.cost_per_million_input_tokens || 0;
+      row.querySelector('.mdl-cost-out').value = data.cost_per_million_output_tokens || 0;
+    }
+    row.querySelector('.remove-model').addEventListener('click', function() { row.remove(); updatePriorityBadges(container); });
+    initDragAndDrop(row, container);
+    container.appendChild(clone);
+    var provSel = container.querySelector('.form-row:last-child .mdl-provider');
+    var mdlSel = container.querySelector('.form-row:last-child .mdl-name');
+    if (provSel) {
+      var names = getProviderNames();
+      provSel.innerHTML = '<option value="">-- select --</option>' + names.map(function(n){return '<option value="'+n+'"'+(data&&n===data.provider?' selected':'')+'>'+n+'</option>';}).join('');
+      // When provider changes, fetch its models
+      provSel.addEventListener('change', function() {
+        var prov = this.value;
+        if (prov) { fetchModelsForProvider(prov, mdlSel, ''); }
+        else { mdlSel.innerHTML = '<option value="">-- select provider first --</option>'; }
+      });
+      // If loading existing data, fetch models for the selected provider
+      if (data && data.provider) {
+        fetchModelsForProvider(data.provider, mdlSel, data.model || '');
+      }
+    }
+    updatePriorityBadges(container);
+  }
+
+  // --- Drag-and-Drop for Model Priority Reordering ---
+  var dragState = { el: null, container: null };
+
+  function initDragAndDrop(row, container) {
+    row.addEventListener('dragstart', function(e) {
+      dragState.el = row;
+      dragState.container = container;
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', '');
+    });
+    row.addEventListener('dragend', function() {
+      row.classList.remove('dragging');
+      clearDragIndicators(container);
+      dragState.el = null;
+      dragState.container = null;
+    });
+    row.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (!dragState.el || dragState.el === row || dragState.container !== container) return;
+      clearDragIndicators(container);
+      var rect = row.getBoundingClientRect();
+      var midY = rect.top + rect.height / 2;
+      if (e.clientY < midY) { row.classList.add('drag-over-top'); }
+      else { row.classList.add('drag-over-bottom'); }
+    });
+    row.addEventListener('dragleave', function() {
+      row.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+    row.addEventListener('drop', function(e) {
+      e.preventDefault();
+      if (!dragState.el || dragState.el === row || dragState.container !== container) return;
+      var rect = row.getBoundingClientRect();
+      var midY = rect.top + rect.height / 2;
+      if (e.clientY < midY) { container.insertBefore(dragState.el, row); }
+      else { container.insertBefore(dragState.el, row.nextSibling); }
+      clearDragIndicators(container);
+      updatePriorityBadges(container);
+    });
+  }
+
+  function clearDragIndicators(container) {
+    container.querySelectorAll('.form-row').forEach(function(r) {
+      r.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+  }
+
+  function updatePriorityBadges(container) {
+    var rows = container.querySelectorAll('.form-row');
+    rows.forEach(function(row, idx) {
+      var badge = row.querySelector('.priority-badge');
+      var hidden = row.querySelector('.mdl-priority');
+      if (badge) badge.textContent = idx + 1;
+      if (hidden) hidden.value = idx;
+    });
+  }
+
+  function addGroupCard(data) {
+    var clone = grpTpl.content.cloneNode(true);
+    var card = clone.querySelector('.item-card');
+    var nameInput = card.querySelector('.grp-name');
+    var titleEl = card.querySelector('.group-title');
+    if (data) { nameInput.value = data.name || ''; titleEl.textContent = data.name || 'New Group'; card.querySelector('.grp-version-fallback').checked = !!data.version_fallback_enabled; }
+    nameInput.addEventListener('input', function() { titleEl.textContent = this.value || 'New Group'; });
+    card.querySelector('.remove-group').addEventListener('click', function() { card.remove(); });
+    var modelsContainer = card.querySelector('.models-container');
+    card.querySelector('.add-model').addEventListener('click', function() { addModelRow(modelsContainer, null); });
+    grpList.appendChild(clone);
+    if (data && data.models) {
+      // Sort models by priority so visual order matches stored priority
+      var sorted = data.models.slice().sort(function(a,b){ return (a.priority||100) - (b.priority||100); });
+      sorted.forEach(function(m) { addModelRow(card.querySelector('.models-container'), m); });
+    }
+    else { addModelRow(card.querySelector('.models-container'), null); }
+  }
+
+  document.getElementById('add-group').addEventListener('click', function() { addGroupCard(null); setStatus('Model group added'); });
+
+  // --- Load Config from API ---
+  function loadConfig() {
+    setStatus('Loading configuration…');
+    fetch(apiUrl('config'))
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(cfg) { config = cfg; populateFromConfig(cfg); setStatus('Configuration loaded'); })
+      .catch(function(err) { setStatus('Failed to load config: ' + err.message); });
+  }
+
+  function populateFromConfig(cfg) {
+    if (cfg.server) { document.getElementById('srv-host').value=cfg.server.host||'127.0.0.1'; document.getElementById('srv-port').value=cfg.server.port||3000; document.getElementById('srv-timeout').value=cfg.server.request_timeout_seconds||30; document.getElementById('srv-max-body').value=cfg.server.max_request_size_mb||10; }
+    document.getElementById('tls-enabled').checked=!!(cfg.tls&&cfg.tls.enabled); document.getElementById('tls-cert').value=(cfg.tls&&cfg.tls.cert_path)||''; document.getElementById('tls-key').value=(cfg.tls&&cfg.tls.key_path)||'';
+    if (cfg.admin) { document.getElementById('admin-path').value=cfg.admin.path||'/admin'; if(cfg.admin.auth){document.getElementById('admin-auth-enabled').checked=!!cfg.admin.auth.enabled; document.getElementById('admin-user-env').value=cfg.admin.auth.username_env||''; document.getElementById('admin-pass-env').value=cfg.admin.auth.password_env||'';} }
+    provList.innerHTML=''; if(cfg.providers){cfg.providers.forEach(function(p){addProviderCard(p);});}
+    grpList.innerHTML=''; if(cfg.model_groups){cfg.model_groups.forEach(function(g){addGroupCard(g);});}
+    if(cfg.retry){document.getElementById('retry-max').value=cfg.retry.max_retries_per_provider||1; document.getElementById('retry-backoff').value=(cfg.retry.backoff_sequence_seconds&&cfg.retry.backoff_sequence_seconds[0])||1; if(cfg.retry.backoff_sequence_seconds&&cfg.retry.backoff_sequence_seconds.length>1&&cfg.retry.backoff_sequence_seconds[0]){document.getElementById('retry-multiplier').value=(cfg.retry.backoff_sequence_seconds[1]/cfg.retry.backoff_sequence_seconds[0]).toFixed(2).replace(/\.00$/,'');}else{document.getElementById('retry-multiplier').value=2;} document.getElementById('retry-jitter-enabled').value=cfg.retry.jitter_enabled===false?'false':'true'; document.getElementById('retry-jitter-ratio').value=cfg.retry.jitter_ratio!=null?cfg.retry.jitter_ratio:0.2;}
+    if(cfg.cors){document.getElementById('cors-enabled').checked=!!cfg.cors.enabled; document.getElementById('cors-origins').value=(cfg.cors.allowed_origins||[]).join(', '); document.getElementById('cors-methods').value=(cfg.cors.allowed_methods||[]).join(', '); document.getElementById('cors-headers').value=(cfg.cors.allowed_headers||[]).join(', ');}
+    if(cfg.circuit_breaker){document.getElementById('cb-threshold').value=cfg.circuit_breaker.failure_threshold||1; document.getElementById('cb-initial-backoff').value=(cfg.circuit_breaker.backoff_sequence_seconds&&cfg.circuit_breaker.backoff_sequence_seconds[0])||5; document.getElementById('cb-max-backoff').value=(cfg.circuit_breaker.backoff_sequence_seconds&&cfg.circuit_breaker.backoff_sequence_seconds[cfg.circuit_breaker.backoff_sequence_seconds.length-1])||300; if(cfg.circuit_breaker.backoff_sequence_seconds&&cfg.circuit_breaker.backoff_sequence_seconds.length>1&&cfg.circuit_breaker.backoff_sequence_seconds[0]){document.getElementById('cb-multiplier').value=(cfg.circuit_breaker.backoff_sequence_seconds[1]/cfg.circuit_breaker.backoff_sequence_seconds[0]).toFixed(2).replace(/\.00$/,'');}else{document.getElementById('cb-multiplier').value=2;}}
+    if(cfg.logging){document.getElementById('log-request-body').checked=!!cfg.logging.request_body_logging; document.getElementById('log-response-body').checked=!!cfg.logging.response_body_logging; document.getElementById('log-max-body').value=cfg.logging.max_body_size_bytes||10240; document.getElementById('log-db-path').value=cfg.logging.database_path||'logs.db'; document.getElementById('log-excluded-fields').value=(cfg.logging.excluded_fields||[]).join(', '); document.getElementById('log-retention').value=cfg.logging.retention_days||30; document.getElementById('log-cleanup').value=cfg.logging.cleanup_schedule_hours||24;}
+    if(cfg.semantic_cache){document.getElementById('cache-enabled').checked=!!cfg.semantic_cache.enabled; document.getElementById('cache-qdrant-url').value=cfg.semantic_cache.qdrant_url||''; document.getElementById('cache-collection').value=cfg.semantic_cache.collection_name||'ai_gateway_cache'; document.getElementById('cache-threshold').value=cfg.semantic_cache.similarity_threshold||0.95; document.getElementById('cache-ttl').value=cfg.semantic_cache.ttl_seconds||3600; document.getElementById('cache-max-entries').value=cfg.semantic_cache.max_cache_size||10000;}
+    if(cfg.context){document.getElementById('context-enabled').checked=!!cfg.context.enabled; document.getElementById('context-strategy').value=cfg.context.truncation_strategy||'remove_oldest'; document.getElementById('context-window-size').value=cfg.context.sliding_window_size||10; document.getElementById('context-cache-ttl').value=cfg.context.capabilities_cache_ttl_seconds||3600; document.getElementById('context-max-retries').value=cfg.context.max_truncation_retries||3;}
+    populateProviderSelects();
+    if(cfg.semantic_cache&&cfg.semantic_cache.embedding_provider){
+      document.getElementById('cache-embed-provider').value=cfg.semantic_cache.embedding_provider;
+      fetchModelsForProvider(cfg.semantic_cache.embedding_provider, document.getElementById('cache-embed-model'), cfg.semantic_cache.embedding_model||'text-embedding-3-small');
+    }
+  }
+
+  // --- Collect Config from UI ---
+  function collectConfig() {
+    var cfg = config ? JSON.parse(JSON.stringify(config)) : {};
+    cfg.server = { host:document.getElementById('srv-host').value.trim(), port:parseInt(document.getElementById('srv-port').value,10), request_timeout_seconds:parseInt(document.getElementById('srv-timeout').value,10), max_request_size_mb:parseInt(document.getElementById('srv-max-body').value,10) };
+    cfg.tls=document.getElementById('tls-enabled').checked?{enabled:true,cert_path:document.getElementById('tls-cert').value.trim(),key_path:document.getElementById('tls-key').value.trim()}:null;
+    cfg.admin=cfg.admin||{}; cfg.admin.enabled=cfg.admin.enabled!==false; cfg.admin.path=document.getElementById('admin-path').value.trim(); cfg.admin.auth={enabled:document.getElementById('admin-auth-enabled').checked,username_env:document.getElementById('admin-user-env').value.trim()||null,password_env:document.getElementById('admin-pass-env').value.trim()||null};
+    cfg.providers=[]; document.querySelectorAll('#providers-list .item-card').forEach(function(card){var p={name:card.querySelector('.prov-name').value.trim(),type:card.querySelector('.prov-type').value,base_url:card.querySelector('.prov-url').value.trim(),api_key_env:card.querySelector('.prov-key-env').value.trim()||null,api_key_status:card.dataset.apiKeyStatus||'missing',api_key_configured:card.dataset.apiKeyConfigured==='true',timeout_seconds:parseInt(card.querySelector('.prov-timeout').value,10),rate_limit_per_minute:parseInt(card.querySelector('.prov-rate').value,10),max_connections:parseInt(card.querySelector('.prov-max-conn').value,10),connection_pool:{max_idle_per_host:parseInt(card.querySelector('.prov-pool-max-idle').value,10),idle_timeout_seconds:parseInt(card.querySelector('.prov-pool-idle-timeout').value,10)}};var r=card.querySelector('.prov-region').value.trim();if(r)p.region=r;if(p.type==='bedrock'){var bedrockRegion=r||'us-east-1';p.base_url='https://bedrock-mantle.'+bedrockRegion+'.api.aws/v1';if(!p.region)p.region=bedrockRegion;}var budgetLimit=card.querySelector('.prov-budget-limit').value.trim();if(budgetLimit){p.budget={limit_usd:parseFloat(budgetLimit),reset_policy:card.querySelector('.prov-budget-reset').value};}var mm=card.querySelector('.prov-manual-models').value.split('\n').map(function(s){return s.trim();}).filter(Boolean);if(mm.length)p.manual_models=mm;if(p.type==='bedrock'){p.global_inference_profile=card.querySelector('.prov-global-inference').checked;p.prompt_caching=card.querySelector('.prov-prompt-caching').checked;p.reasoning=card.querySelector('.prov-reasoning').checked;}cfg.providers.push(p);});
+    cfg.model_groups=[]; document.querySelectorAll('#groups-list .item-card').forEach(function(card){var g={name:card.querySelector('.grp-name').value.trim(),version_fallback_enabled:card.querySelector('.grp-version-fallback').checked,models:[]};card.querySelectorAll('.models-container .form-row').forEach(function(row){g.models.push({provider:(row.querySelector('.mdl-provider')||{}).value||'',model:(row.querySelector('.mdl-name')||{}).value||'',priority:parseInt((row.querySelector('.mdl-priority')||{}).value||'100',10),cost_per_million_input_tokens:parseFloat((row.querySelector('.mdl-cost-in')||{}).value||'0'),cost_per_million_output_tokens:parseFloat((row.querySelector('.mdl-cost-out')||{}).value||'0')});});cfg.model_groups.push(g);});
+    var retryMax=parseInt(document.getElementById('retry-max').value,10);
+    var retryBackoff=parseFloat(document.getElementById('retry-backoff').value);
+    var retryMultiplier=parseFloat(document.getElementById('retry-multiplier').value);
+    var retrySequence=[retryBackoff,retryBackoff*retryMultiplier,retryBackoff*retryMultiplier*retryMultiplier].map(function(v){return Math.max(0,Math.round(v));});
+    cfg.retry={max_retries_per_provider:retryMax,backoff_sequence_seconds:retrySequence,jitter_enabled:document.getElementById('retry-jitter-enabled').value==='true',jitter_ratio:parseFloat(document.getElementById('retry-jitter-ratio').value)};
+    cfg.cors={enabled:document.getElementById('cors-enabled').checked,allowed_origins:document.getElementById('cors-origins').value.split(',').map(function(s){return s.trim();}).filter(Boolean),allowed_methods:document.getElementById('cors-methods').value.split(',').map(function(s){return s.trim();}).filter(Boolean),allowed_headers:document.getElementById('cors-headers').value.split(',').map(function(s){return s.trim();}).filter(Boolean)};
+    cfg.circuit_breaker=cfg.circuit_breaker||{}; cfg.circuit_breaker.failure_threshold=parseInt(document.getElementById('cb-threshold').value,10); cfg.circuit_breaker.success_threshold=cfg.circuit_breaker.success_threshold||1; cfg.circuit_breaker.backoff_sequence_seconds=[parseInt(document.getElementById('cb-initial-backoff').value,10),Math.round(parseInt(document.getElementById('cb-initial-backoff').value,10)*parseFloat(document.getElementById('cb-multiplier').value||'2')),Math.round(parseInt(document.getElementById('cb-max-backoff').value,10)/2),parseInt(document.getElementById('cb-max-backoff').value,10)].filter(function(v,i,arr){return Number.isFinite(v)&&v>0&&(i===0||v!==arr[i-1]);});
+    cfg.logging={request_body_logging:document.getElementById('log-request-body').checked,response_body_logging:document.getElementById('log-response-body').checked,max_body_size_bytes:parseInt(document.getElementById('log-max-body').value,10),database_path:document.getElementById('log-db-path').value.trim(),excluded_fields:document.getElementById('log-excluded-fields').value.split(',').map(function(s){return s.trim();}).filter(Boolean),retention_days:parseInt(document.getElementById('log-retention').value,10),cleanup_schedule_hours:parseInt(document.getElementById('log-cleanup').value,10)};
+    cfg.semantic_cache={enabled:document.getElementById('cache-enabled').checked,qdrant_url:document.getElementById('cache-qdrant-url').value.trim(),collection_name:document.getElementById('cache-collection').value.trim(),embedding_provider:document.getElementById('cache-embed-provider').value,embedding_model:document.getElementById('cache-embed-model').value.trim(),similarity_threshold:parseFloat(document.getElementById('cache-threshold').value),ttl_seconds:parseInt(document.getElementById('cache-ttl').value,10),max_cache_size:parseInt(document.getElementById('cache-max-entries').value,10)};
+    cfg.context={enabled:document.getElementById('context-enabled').checked,truncation_strategy:document.getElementById('context-strategy').value,sliding_window_size:parseInt(document.getElementById('context-window-size').value,10),capabilities_cache_ttl_seconds:parseInt(document.getElementById('context-cache-ttl').value,10),max_truncation_retries:parseInt(document.getElementById('context-max-retries').value,10)};
+    return cfg;
+  }
+
+  // --- Save Config ---
+  function showToast(msg, isError) {
+    var toast = document.createElement('div');
+    toast.textContent = msg;
+    toast.style.cssText = 'position:fixed;top:1rem;right:1rem;padding:.75rem 1.25rem;border-radius:var(--radius);color:#fff;font-size:.875rem;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.2);transition:opacity .3s;background:'+(isError?'var(--danger)':'var(--success)');
+    document.body.appendChild(toast);
+    setTimeout(function(){toast.style.opacity='0';setTimeout(function(){toast.remove();},300);},3000);
+  }
+
+  function saveConfig() {
+    if(!validateActivePage()){setStatus('Validation failed — fix highlighted errors');showToast('Validation failed — fix highlighted errors',true);return;}
+    var cfg=collectConfig(); setStatus('Saving…');
+    fetch(apiUrl('config'),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)})
+      .then(function(r){if(!r.ok)return r.text().then(function(t){throw new Error(t);});return r.json();})
+      .then(function(){setStatus('Configuration saved');showToast('Configuration saved to file');})
+      .catch(function(err){setStatus('Save failed: '+err.message);showToast('Save failed: '+err.message,true);});
+  }
+
+  // --- Action Buttons ---
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    switch (btn.dataset.action) {
+      case 'save': saveConfig(); break;
+      case 'reset': loadConfig(); break;
+      case 'reload':
+        fetch(apiUrl('config/reload'),{method:'POST'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);setStatus('Config reloaded');loadConfig();}).catch(function(err){setStatus('Reload failed: '+err.message);});
+        break;
+      case 'export':
+        fetch(apiUrl('config/export')).then(function(r){return r.blob();}).then(function(b){var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='config.yaml';a.click();}).catch(function(err){setStatus('Export failed: '+err.message);});
+        break;
+      case 'import': fileInput.click(); break;
+    }
+  });
+
+  var fileInput = document.createElement('input');
+  fileInput.type='file'; fileInput.accept='.yaml,.yml'; fileInput.style.display='none';
+  document.body.appendChild(fileInput);
+  fileInput.addEventListener('change', function() {
+    if(!this.files.length)return;
+    var file=this.files[0];
+    file.text().then(function(text){
+      return fetch(apiUrl('config/import'),{method:'POST',headers:{'Content-Type':'text/plain; charset=utf-8'},body:text});
+    }).then(function(r){
+      return r.json().then(function(data){
+        if(!r.ok){throw new Error((data.error&&data.error.message)||(data.errors&&data.errors.join(', '))||('HTTP '+r.status));}
+        return data;
+      });
+    }).then(function(data){
+      config=data.config; populateFromConfig(config); setStatus('Config imported into form. Save to apply changes.'); showToast('Imported config loaded into the form. Save to apply it.');
+    }).catch(function(err){setStatus('Import failed: '+err.message);showToast('Import failed: '+err.message,true);});
+    this.value='';
+  });
+
+  // --- Init: load config on startup ---
+  loadConfig();
+})();
+</script>
+</body>
+</html>

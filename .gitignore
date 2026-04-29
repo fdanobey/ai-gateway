@@ -1,0 +1,54 @@
+# Build artifacts
+/target
+/release
+
+# Cargo lock (library crate — regenerated on build)
+Cargo.lock
+
+# Runtime databases
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets & credentials
+.env
+.env.*
+*.pem
+id_*
+
+# User config (contains API keys at runtime)
+config.yaml
+
+# Build/test log artifacts
+*.out
+*.err
+cargo_*.txt
+
+# Temp test directories
+tmp-*/
+
+# IDE / editor metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Agent / workflow metadata
+.kilocode/
+.spec-workflow/
+.kiro/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Local build output (release artifacts live in GitHub Releases)
+/release
+/dist
+
+# Installer / release binaries (anywhere in tree)
+*.exe
+*.zip
+*.msi
+*.dmg
