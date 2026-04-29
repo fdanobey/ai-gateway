@@ -24,7 +24,7 @@
 
 AI providers go down. Rate limits hit. Models get deprecated. When that happens, you're stuck manually switching providers, changing model names, and hoping the next one works.
 
-OBEY API Gateway sits between your application and your AI providers. Point your existing OpenAI SDK at it instead of `api.openai.com`, and you get automatic failover, circuit breakers, and multi-provider routing — without changing your application code.
+OBEY API Gateway sits between your application and your AI providers. Point your existing OpenAI SDK at it instead of `api.openai.com`, and you get automatic failover, circuit breakers, and multi-provider routing without changing your application code.
 
 ## Key Features
 
