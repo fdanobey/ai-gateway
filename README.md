@@ -358,4 +358,4 @@ Tests use `tower::ServiceExt::oneshot()` for integration testing (no port bindin
 
 ## License
 
-Copyright © 2026. All rights reserved.
+This project is licensed under the [MIT License](LICENSE).
