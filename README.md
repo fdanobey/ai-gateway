@@ -10,12 +10,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/obey/ai-gateway/releases/latest"><img src="https://img.shields.io/github/v/release/obey/ai-gateway?style=flat-square" alt="Release" /></a>
-  <a href="https://github.com/obey/ai-gateway/actions"><img src="https://img.shields.io/github/actions/workflow/status/obey/ai-gateway/release.yml?style=flat-square&label=build" alt="Build" /></a>
+  <a href="https://github.com/fdanobey/ai-gateway/releases/latest"><img src="https://img.shields.io/github/v/release/fdanobey/ai-gateway?style=flat-square" alt="Release" /></a>
+  <a href="https://github.com/fdanobey/ai-gateway/actions"><img src="https://img.shields.io/github/actions/workflow/status/fdanobey/ai-gateway/release.yml?style=flat-square&label=build" alt="Build" /></a>
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/obey/ai-gateway/releases/latest">Download Latest Release</a></strong> · Windows installer and portable zip
+  <strong><a href="https://github.com/fdanobey/ai-gateway/releases/latest">Download Latest Release</a></strong> · Windows installer and portable zip
 </p>
 
 ---
@@ -46,13 +46,13 @@ OBEY API Gateway sits between your application and your AI providers. Point your
 
 ### Option 1: Download (Windows)
 
-Grab the [latest release](https://github.com/obey/ai-gateway/releases/latest) — either the installer (`.exe`) or portable zip. Double-click to run. The gateway starts on `http://localhost:8080` and opens the dashboard automatically on first launch.
+Grab the [latest release](https://github.com/fdanobey/ai-gateway/releases/latest) — either the installer (`.exe`) or portable zip. Double-click to run. The gateway starts on `http://localhost:8080` and opens the dashboard automatically on first launch.
 
 ### Option 2: Build from Source
 
 ```bash
 # Clone
-git clone https://github.com/obey/ai-gateway.git
+git clone https://github.com/fdanobey/ai-gateway.git
 cd ai-gateway
 
 # Build (headless)
