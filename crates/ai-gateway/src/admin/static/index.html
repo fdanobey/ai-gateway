@@ -43,6 +43,7 @@ main h2{font-size:1.25rem;margin-bottom:1.5rem;padding-bottom:.5rem;border-botto
 border-radius:var(--radius);font-size:.875rem;background:var(--surface);color:var(--text);transition:border-color .15s}
 .form-group input:focus,.form-group select:focus,.form-group textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(13,110,253,.15)}
 .form-group .hint{font-size:.75rem;color:var(--text-muted);margin-top:.15rem}
+.hint-inline{font-size:.7rem;color:var(--text-muted);font-weight:normal}
 .form-group .error{font-size:.75rem;color:var(--danger);margin-top:.15rem;display:none}
 .form-group .error.visible{display:block}
 .form-group input.field-invalid,.form-group select.field-invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(220,53,69,.15)}
@@ -79,8 +80,9 @@ font-size:.875rem;font-weight:500;cursor:pointer;transition:background .15s}
 
   /* Drag-and-drop for model rows */
   .models-container .form-row{position:relative;transition:transform .15s ease,box-shadow .15s ease;
-  display:grid;grid-template-columns:auto auto 1fr 1fr auto auto auto;gap:.5rem;align-items:end;
+  display:grid;grid-template-columns:auto auto minmax(100px,1fr) minmax(120px,2.5fr) auto auto auto;gap:.5rem;align-items:end;
   background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem;margin-bottom:.5rem}
+  .models-container .form-row .mdl-priority{display:none}
   .models-container .form-row.draggable{cursor:grab}
   .models-container .form-row.dragging{opacity:.4;cursor:grabbing}
   .models-container .form-row.drag-over-top{border-top:2px solid var(--primary);margin-top:-2px}
@@ -261,12 +263,25 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label>Timeout (seconds)</label>
+            <label>Timeout (seconds) <span class="hint-inline">legacy fallback</span></label>
             <input type="number" class="prov-timeout" value="30" min="1">
+            <div class="hint">Used as total timeout when split fields below are empty</div>
           </div>
           <div class="form-group">
             <label>Rate Limit (req/min, 0=unlimited)</label>
             <input type="number" class="prov-rate" value="0" min="0">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>TTFB Timeout (seconds)</label>
+            <input type="number" class="prov-ttfb-timeout" min="1" placeholder="auto">
+            <div class="hint">Time-to-first-byte. Default: 30s, thinking models: 120s</div>
+          </div>
+          <div class="form-group">
+            <label>Total Timeout (seconds)</label>
+            <input type="number" class="prov-total-timeout" min="1" placeholder="auto">
+            <div class="hint">Full round-trip. Default: 300s, thinking models: 600s</div>
           </div>
         </div>
         <div class="form-row">
@@ -339,19 +354,25 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
           </div>
           <div class="form-check">
             <input type="checkbox" class="prov-global-inference">
-            <label>Enable Global Inference Profile</label>
+            <label>Use Global inference (auto-select optimal AWS Region)</label>
           </div>
-          <div class="info-note" style="margin-top:-.5rem;margin-bottom:.75rem">Routes requests across regions using model ID prefixes (e.g. us.anthropic.claude-3-5-sonnet).</div>
+          <div class="form-check">
+            <input type="checkbox" class="prov-cross-region">
+            <label>Use cross-region inference</label>
+          </div>
           <div class="form-check">
             <input type="checkbox" class="prov-prompt-caching">
-            <label>Enable Prompt Caching</label>
+            <label>Enable prompt caching</label>
           </div>
-          <div class="info-note" style="margin-top:-.5rem;margin-bottom:.75rem">Supported on Claude 3.5+ models. Reduces latency for repeated prompts.</div>
+          <div class="info-note" style="margin-top:-.5rem;margin-bottom:.75rem">Note: If you don't see cache usage, try selecting a different model and then selecting your desired model again.</div>
           <div class="form-check">
-            <input type="checkbox" class="prov-reasoning" checked>
-            <label>Enable Reasoning Mode</label>
+            <input type="checkbox" class="prov-custom-vpc">
+            <label>Use custom VPC endpoint</label>
           </div>
-          <div class="info-note" style="margin-top:-.5rem;margin-bottom:.75rem">Enables extended thinking for supported models (Claude 3.5 Sonnet v2+).</div>
+          <div class="form-check">
+            <input type="checkbox" class="prov-reasoning">
+            <label>Enable reasoning</label>
+          </div>
           <button type="button" class="btn btn-secondary btn-sm btn-refresh-models" style="margin-top:.5rem">Refresh Models</button>
         </div>
         <div style="margin-top:.5rem">
@@ -931,6 +952,8 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
       var typeIn = card.querySelector('.prov-type');
       var urlIn = card.querySelector('.prov-url');
       var timeoutIn = card.querySelector('.prov-timeout');
+      var ttfbTimeoutIn = card.querySelector('.prov-ttfb-timeout');
+      var totalTimeoutIn = card.querySelector('.prov-total-timeout');
       var rateIn = card.querySelector('.prov-rate');
       var maxConnIn = card.querySelector('.prov-max-conn');
       var poolMaxIdleIn = card.querySelector('.prov-pool-max-idle');
@@ -940,6 +963,8 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
       if (!validateRequired(typeIn, 'Provider type')) ok = false;
       if (urlIn.value.trim() && !validateUrl(urlIn, 'Base URL')) ok = false;
       if (!validatePositiveInt(timeoutIn, 'Timeout')) ok = false;
+      if (ttfbTimeoutIn.value.trim() && !validatePositiveInt(ttfbTimeoutIn, 'TTFB Timeout')) ok = false;
+      if (totalTimeoutIn.value.trim() && !validatePositiveInt(totalTimeoutIn, 'Total Timeout')) ok = false;
       if (!validateNonNegativeInt(rateIn, 'Rate limit')) ok = false;
       if (!validatePositiveInt(maxConnIn, 'Max connections')) ok = false;
       if (!validatePositiveInt(poolMaxIdleIn, 'Pool max idle')) ok = false;
@@ -1172,6 +1197,8 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
       card.querySelector('.prov-url').value = data.base_url || '';
       keyInput.value = data.api_key_env || '';
       card.querySelector('.prov-timeout').value = data.timeout_seconds || 30;
+      card.querySelector('.prov-ttfb-timeout').value = data.ttfb_timeout_seconds != null ? data.ttfb_timeout_seconds : '';
+      card.querySelector('.prov-total-timeout').value = data.total_timeout_seconds != null ? data.total_timeout_seconds : '';
       card.querySelector('.prov-rate').value = data.rate_limit_per_minute || 0;
       card.querySelector('.prov-max-conn').value = data.max_connections || 100;
       card.querySelector('.prov-region').value = data.region || 'us-east-1';
@@ -1183,7 +1210,9 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
       // Restore Bedrock-specific checkbox values (Req 8.2, 8.4)
       if (data.type === 'bedrock') {
         card.querySelector('.prov-global-inference').checked = !!data.global_inference_profile;
+        card.querySelector('.prov-cross-region').checked = !!data.cross_region_inference;
         card.querySelector('.prov-prompt-caching').checked = !!data.prompt_caching;
+        card.querySelector('.prov-custom-vpc').checked = !!data.custom_vpc_endpoint;
         card.querySelector('.prov-reasoning').checked = data.reasoning !== false;
       }
     }
@@ -1531,7 +1560,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
       var rect = row.getBoundingClientRect();
       var midY = rect.top + rect.height / 2;
       if (e.clientY < midY) { container.insertBefore(dragState.el, row); }
-      else { container.insertBefore(dragState.el, row.nextSibling); }
+      else { container.insertBefore(dragState.el, row.nextElementSibling); }
       clearDragIndicators(container);
       updatePriorityBadges(container);
     });
@@ -1549,7 +1578,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
       var badge = row.querySelector('.priority-badge');
       var hidden = row.querySelector('.mdl-priority');
       if (badge) badge.textContent = idx + 1;
-      if (hidden) hidden.value = idx;
+      if (hidden) hidden.value = idx + 1;
     });
   }
 
@@ -1565,9 +1594,11 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
     card.querySelector('.add-model').addEventListener('click', function() { addModelRow(modelsContainer, null); });
     grpList.appendChild(clone);
     if (data && data.models) {
-      // Sort models by priority so visual order matches stored priority
-      var sorted = data.models.slice().sort(function(a,b){ return (a.priority||100) - (b.priority||100); });
-      sorted.forEach(function(m) { addModelRow(card.querySelector('.models-container'), m); });
+      // Sort models by priority so visual order matches stored priority;
+      // use original array index as tiebreaker for stable ordering.
+      var indexed = data.models.map(function(m, i) { return { m: m, i: i }; });
+      indexed.sort(function(a, b) { return (a.m.priority || 100) - (b.m.priority || 100) || a.i - b.i; });
+      indexed.forEach(function(item) { addModelRow(card.querySelector('.models-container'), item.m); });
     }
     else { addModelRow(card.querySelector('.models-container'), null); }
   }
@@ -1608,7 +1639,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
     cfg.server = { host:document.getElementById('srv-host').value.trim(), port:parseInt(document.getElementById('srv-port').value,10), request_timeout_seconds:parseInt(document.getElementById('srv-timeout').value,10), max_request_size_mb:parseInt(document.getElementById('srv-max-body').value,10) };
     cfg.tls=document.getElementById('tls-enabled').checked?{enabled:true,cert_path:document.getElementById('tls-cert').value.trim(),key_path:document.getElementById('tls-key').value.trim()}:null;
     cfg.admin=cfg.admin||{}; cfg.admin.enabled=cfg.admin.enabled!==false; cfg.admin.path=document.getElementById('admin-path').value.trim(); cfg.admin.auth={enabled:document.getElementById('admin-auth-enabled').checked,username_env:document.getElementById('admin-user-env').value.trim()||null,password_env:document.getElementById('admin-pass-env').value.trim()||null};
-    cfg.providers=[]; document.querySelectorAll('#providers-list .item-card').forEach(function(card){var p={name:card.querySelector('.prov-name').value.trim(),type:card.querySelector('.prov-type').value,base_url:card.querySelector('.prov-url').value.trim(),api_key_env:card.querySelector('.prov-key-env').value.trim()||null,api_key_status:card.dataset.apiKeyStatus||'missing',api_key_configured:card.dataset.apiKeyConfigured==='true',timeout_seconds:parseInt(card.querySelector('.prov-timeout').value,10),rate_limit_per_minute:parseInt(card.querySelector('.prov-rate').value,10),max_connections:parseInt(card.querySelector('.prov-max-conn').value,10),connection_pool:{max_idle_per_host:parseInt(card.querySelector('.prov-pool-max-idle').value,10),idle_timeout_seconds:parseInt(card.querySelector('.prov-pool-idle-timeout').value,10)}};var r=card.querySelector('.prov-region').value.trim();if(r)p.region=r;if(p.type==='bedrock'){var bedrockRegion=r||'us-east-1';p.base_url='https://bedrock-mantle.'+bedrockRegion+'.api.aws/v1';if(!p.region)p.region=bedrockRegion;}var budgetLimit=card.querySelector('.prov-budget-limit').value.trim();if(budgetLimit){p.budget={limit_usd:parseFloat(budgetLimit),reset_policy:card.querySelector('.prov-budget-reset').value};}var mm=card.querySelector('.prov-manual-models').value.split('\n').map(function(s){return s.trim();}).filter(Boolean);if(mm.length)p.manual_models=mm;if(p.type==='bedrock'){p.global_inference_profile=card.querySelector('.prov-global-inference').checked;p.prompt_caching=card.querySelector('.prov-prompt-caching').checked;p.reasoning=card.querySelector('.prov-reasoning').checked;}cfg.providers.push(p);});
+    cfg.providers=[]; document.querySelectorAll('#providers-list .item-card').forEach(function(card){var ttfbVal=card.querySelector('.prov-ttfb-timeout').value.trim();var totalVal=card.querySelector('.prov-total-timeout').value.trim();var p={name:card.querySelector('.prov-name').value.trim(),type:card.querySelector('.prov-type').value,base_url:card.querySelector('.prov-url').value.trim(),api_key_env:card.querySelector('.prov-key-env').value.trim()||null,api_key_status:card.dataset.apiKeyStatus||'missing',api_key_configured:card.dataset.apiKeyConfigured==='true',timeout_seconds:parseInt(card.querySelector('.prov-timeout').value,10),ttfb_timeout_seconds:ttfbVal?parseInt(ttfbVal,10):null,total_timeout_seconds:totalVal?parseInt(totalVal,10):null,rate_limit_per_minute:parseInt(card.querySelector('.prov-rate').value,10),max_connections:parseInt(card.querySelector('.prov-max-conn').value,10),connection_pool:{max_idle_per_host:parseInt(card.querySelector('.prov-pool-max-idle').value,10),idle_timeout_seconds:parseInt(card.querySelector('.prov-pool-idle-timeout').value,10)}};var r=card.querySelector('.prov-region').value.trim();if(r)p.region=r;if(p.type==='bedrock'){var bedrockRegion=r||'us-east-1';p.base_url='https://bedrock-mantle.'+bedrockRegion+'.api.aws/v1';if(!p.region)p.region=bedrockRegion;}var budgetLimit=card.querySelector('.prov-budget-limit').value.trim();if(budgetLimit){p.budget={limit_usd:parseFloat(budgetLimit),reset_policy:card.querySelector('.prov-budget-reset').value};}var mm=card.querySelector('.prov-manual-models').value.split('\n').map(function(s){return s.trim();}).filter(Boolean);if(mm.length)p.manual_models=mm;if(p.type==='bedrock'){p.global_inference_profile=card.querySelector('.prov-global-inference').checked;p.cross_region_inference=card.querySelector('.prov-cross-region').checked;p.prompt_caching=card.querySelector('.prov-prompt-caching').checked;p.custom_vpc_endpoint=card.querySelector('.prov-custom-vpc').checked;p.reasoning=card.querySelector('.prov-reasoning').checked;}cfg.providers.push(p);});
     cfg.model_groups=[]; document.querySelectorAll('#groups-list .item-card').forEach(function(card){var g={name:card.querySelector('.grp-name').value.trim(),version_fallback_enabled:card.querySelector('.grp-version-fallback').checked,models:[]};card.querySelectorAll('.models-container .form-row').forEach(function(row){g.models.push({provider:(row.querySelector('.mdl-provider')||{}).value||'',model:(row.querySelector('.mdl-name')||{}).value||'',priority:parseInt((row.querySelector('.mdl-priority')||{}).value||'100',10),cost_per_million_input_tokens:parseFloat((row.querySelector('.mdl-cost-in')||{}).value||'0'),cost_per_million_output_tokens:parseFloat((row.querySelector('.mdl-cost-out')||{}).value||'0')});});cfg.model_groups.push(g);});
     var retryMax=parseInt(document.getElementById('retry-max').value,10);
     var retryBackoff=parseFloat(document.getElementById('retry-backoff').value);

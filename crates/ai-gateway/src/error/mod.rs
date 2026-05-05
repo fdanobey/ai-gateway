@@ -20,8 +20,11 @@ pub enum GatewayError {
     #[error("Rate limit exceeded for provider: {0}")]
     RateLimitExceeded(String),
 
-    #[error("Request timeout after {0}s")]
-    Timeout(u64),
+    #[error("Request timeout after {0}s waiting for first byte from provider")]
+    TtfbTimeout(u64),
+
+    #[error("Request timeout after {0}s total round-trip time")]
+    TotalTimeout(u64),
 
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
@@ -83,7 +86,8 @@ impl GatewayError {
             GatewayError::Authentication(_) => StatusCode::UNAUTHORIZED,
             GatewayError::AllProvidersFailed(_) => StatusCode::BAD_GATEWAY,
             GatewayError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
-            GatewayError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            GatewayError::TtfbTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            GatewayError::TotalTimeout(_) => StatusCode::GATEWAY_TIMEOUT,
             GatewayError::CircuitBreakerOpen(_) => StatusCode::SERVICE_UNAVAILABLE,
             GatewayError::Provider { status_code, .. } => {
                 status_code

@@ -109,6 +109,18 @@ impl Config {
                 errors.push(ValidationError::InvalidTimeout(provider.timeout_seconds));
             }
 
+            if let Some(t) = provider.ttfb_timeout_seconds {
+                if t == 0 {
+                    errors.push(ValidationError::InvalidTimeout(t));
+                }
+            }
+
+            if let Some(t) = provider.total_timeout_seconds {
+                if t == 0 {
+                    errors.push(ValidationError::InvalidTimeout(t));
+                }
+            }
+
             if provider.connection_pool.max_idle_per_host == 0 {
                 errors.push(ValidationError::InvalidValue {
                     field: format!("providers.{}.connection_pool.max_idle_per_host", provider.name),
@@ -170,6 +182,14 @@ impl Config {
                         "Bedrock provider '{}' has no API key configured — authentication is required for Bedrock Mantle endpoints",
                         provider.name
                     );
+                }
+
+                if provider.custom_vpc_endpoint && provider.base_url.as_deref().unwrap_or("").is_empty() {
+                    errors.push(ValidationError::InvalidValue {
+                        field: format!("providers.{}.base_url", provider.name),
+                        value: "empty".to_string(),
+                        expected: "a URL when custom_vpc_endpoint is enabled".to_string(),
+                    });
                 }
             }
         }
@@ -363,6 +383,8 @@ mod property_tests {
                 resolved_api_secret: None,
                 region: None,
                 timeout_seconds: 30,
+                ttfb_timeout_seconds: None,
+                total_timeout_seconds: None,
                 max_connections: 100,
                 rate_limit_per_minute: 0,
                 custom_headers: Default::default(),
@@ -370,6 +392,8 @@ mod property_tests {
                 budget: None,
                 manual_models: vec![],
                 global_inference_profile: false,
+                cross_region_inference: false,
+                custom_vpc_endpoint: false,
                 prompt_caching: false,
                 reasoning: true,
             }],
@@ -693,6 +717,8 @@ model_groups:
                 resolved_api_secret: None,
                 region: region.map(|s| s.to_string()),
                 timeout_seconds: 30,
+                ttfb_timeout_seconds: None,
+                total_timeout_seconds: None,
                 max_connections: 100,
                 rate_limit_per_minute: 0,
                 custom_headers: Default::default(),
@@ -700,6 +726,8 @@ model_groups:
                 budget: None,
                 manual_models: vec![],
                 global_inference_profile,
+                cross_region_inference: false,
+                custom_vpc_endpoint: false,
                 prompt_caching,
                 reasoning,
             };

@@ -12,10 +12,15 @@
 <p align="center">
   <a href="https://github.com/fdanobey/OBEY-api-gateway/releases/latest"><img src="https://img.shields.io/github/v/release/fdanobey/OBEY-api-gateway?style=flat-square" alt="Release" /></a>
   <a href="https://github.com/fdanobey/OBEY-api-gateway/actions"><img src="https://img.shields.io/github/actions/workflow/status/fdanobey/OBEY-api-gateway/release.yml?style=flat-square&label=build" alt="Build" /></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License" /></a>
 </p>
 
 <p align="center">
   <strong><a href="https://github.com/fdanobey/OBEY-api-gateway/releases/latest">Download Latest Release</a></strong> · Windows installer and portable zip
+</p>
+
+<p align="center">
+  <a href="https://railway.app/template/obey-api-gateway?referralCode=obey"><img src="https://railway.app/button.svg" alt="Deploy on Railway" /></a>
 </p>
 
 ---
@@ -41,6 +46,7 @@ OBEY API Gateway sits between your application and your AI providers. Point your
 - **TLS support** — optional HTTPS with certificate configuration
 - **Windows system tray** — double-click desktop app with splash screen and tray menu
 - **Hot config reload** — change settings through the admin UI without restarting
+- **Smart timeouts** — split TTFB / total timeouts with auto-detection of thinking models (o1, o3, DeepSeek-R1, Claude)
 
 ## Quick Start
 
@@ -48,7 +54,25 @@ OBEY API Gateway sits between your application and your AI providers. Point your
 
 Grab the [latest release](https://github.com/fdanobey/OBEY-api-gateway/releases/latest) — either the installer (`.exe`) or portable zip. Double-click to run. The gateway starts on `http://localhost:8080` and opens the dashboard automatically on first launch.
 
-### Option 2: Build from Source
+### Option 2: Deploy to Railway
+
+Click the button above or use the [Railway template](https://railway.app/template/obey-api-gateway). Set your provider API keys as environment variables in the Railway dashboard and you're live in under a minute.
+
+### Option 3: Docker
+
+```bash
+# Build the image
+docker build -t obey-api-gateway .
+
+# Run with config and env vars
+docker run -d \
+  -p 8080:8080 \
+  -e OPENAI_API_KEY=sk-... \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  obey-api-gateway --config /app/config.yaml
+```
+
+### Option 4: Build from Source
 
 ```bash
 # Clone
@@ -105,7 +129,9 @@ providers:
     type: "openai"
     base_url: "https://api.openai.com/v1"
     api_key_env: "OPENAI_API_KEY"       # Env var name, not the key itself
-    timeout_seconds: 30
+    timeout_seconds: 30                 # Legacy: used as total_timeout if split fields omitted
+    # ttfb_timeout_seconds: 30          # Time-to-first-byte (default: 30s, thinking models: 120s)
+    # total_timeout_seconds: 300        # Total round-trip  (default: 300s, thinking models: 600s)
 
   - name: "ollama"
     type: "ollama"
@@ -162,6 +188,40 @@ AWS Bedrock supports two modes:
   type: "bedrock"
   region: "us-east-1"
 ```
+
+Bedrock-specific options:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `cross_region_inference` | `false` | Prefix model IDs with region group (e.g. `us.`) for cross-region routing |
+| `global_inference_profile` | `false` | Let AWS auto-select the optimal region |
+| `prompt_caching` | `false` | Enable prompt caching (Claude 3.5+ models) |
+| `custom_vpc_endpoint` | `false` | Use `base_url` as-is instead of auto-generating the Mantle endpoint |
+| `reasoning` | `true` | Enable extended thinking for supported models |
+
+### Timeout Configuration
+
+Timeouts are split into two phases for clarity:
+
+| Field | Default (standard) | Default (thinking models) | Description |
+|-------|-------------------|--------------------------|-------------|
+| `ttfb_timeout_seconds` | 30s | 120s | Time-to-first-byte — how long to wait for the provider to start responding |
+| `total_timeout_seconds` | 300s | 600s | Total round-trip — ceiling for the entire request including body transfer |
+| `timeout_seconds` | 30s | 30s | Legacy field — used as `total_timeout_seconds` when split fields are omitted |
+
+Thinking models (o1, o3, DeepSeek-R1, QwQ, Claude 3.5 Sonnet v2+, Claude Opus/4+) are detected automatically and get higher defaults. You can override per-provider:
+
+```yaml
+providers:
+  - name: "openai"
+    type: "openai"
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"
+    ttfb_timeout_seconds: 60        # Wait up to 60s for first byte
+    total_timeout_seconds: 600      # Allow up to 10 min total
+```
+
+When a timeout fires, the error response tells the user exactly which timeout was hit and which config field to adjust.
 
 ### Environment Variables
 
@@ -359,3 +419,16 @@ Tests use `tower::ServiceExt::oneshot()` for integration testing (no port bindin
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| `Connection refused` on startup | Port already in use | Change `server.port` in config or stop the conflicting process |
+| Provider returns 401 | API key not resolved | Check that `api_key_env` matches an exported env var, or use the Admin UI to set it |
+| All providers circuit-broken | Sustained upstream failures | Use `/admin/config/reload` to reset breakers, or check provider status pages |
+| Context-length errors loop | Truncation disabled or max retries hit | Enable `context.enabled: true` and increase `max_truncation_retries` |
+| Dashboard shows no data | WebSocket blocked by proxy | Ensure your reverse proxy passes `Upgrade: websocket` headers |
+| Timeout on large prompts | `total_timeout_seconds` too low for model | Increase the provider's `total_timeout_seconds`. For thinking models (o1, o3, DeepSeek-R1), also check `ttfb_timeout_seconds` — these models need longer to start responding |

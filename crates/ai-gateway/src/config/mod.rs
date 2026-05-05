@@ -100,6 +100,64 @@ fn default_request_timeout() -> u64 {
     30
 }
 
+fn default_ttfb_timeout() -> u64 {
+    30
+}
+
+fn default_total_timeout() -> u64 {
+    300
+}
+
+fn default_thinking_ttfb_timeout() -> u64 {
+    120
+}
+
+fn default_thinking_total_timeout() -> u64 {
+    600
+}
+
+/// Returns `true` when the model name matches known reasoning / thinking model
+/// patterns across providers (OpenAI o-series, DeepSeek-R1, Claude reasoning, QwQ, etc.).
+pub fn is_thinking_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+
+    // OpenAI o-series reasoning models (o1, o1-preview, o1-mini, o3, o3-mini, o4-mini, etc.)
+    if (m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4"))
+        && m.chars().nth(2).map_or(true, |c| c == '-' || c == ' ')
+    {
+        return true;
+    }
+
+    // DeepSeek reasoning
+    if m.contains("deepseek-r1") || m.contains("deepseek-reasoner") {
+        return true;
+    }
+
+    // Qwen QwQ reasoning
+    if m.contains("qwq") {
+        return true;
+    }
+
+    // Claude reasoning models (claude-3.5-sonnet-v2+, claude-3-opus, claude-4+)
+    if m.contains("claude") {
+        if m.contains("claude-3-5-sonnet") {
+            if let Some(pos) = m.find("-v") {
+                let after_v = &m[pos + 2..];
+                if let Some(version) = after_v.chars().next().and_then(|c| c.to_digit(10)) {
+                    if version >= 2 {
+                        return true;
+                    }
+                }
+            }
+        }
+        if m.contains("claude-3-opus") || m.contains("claude-4") || m.contains("claude-5") {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn default_max_request_size() -> u64 {
     10
 }
@@ -261,8 +319,20 @@ pub struct Provider {
     #[serde(skip, default)]
     pub resolved_api_secret: Option<String>,
     pub region: Option<String>,
+    /// Legacy single timeout field — used as `total_timeout_seconds` when the
+    /// split fields are not set. Kept for backward compatibility.
     #[serde(default = "default_request_timeout")]
     pub timeout_seconds: u64,
+    /// Time-to-first-byte timeout: maximum seconds to wait for the provider to
+    /// start sending a response (first byte / thinking stream start).
+    /// Default: 30 s (standard models), 120 s (thinking models).
+    #[serde(default)]
+    pub ttfb_timeout_seconds: Option<u64>,
+    /// Total round-trip timeout: maximum seconds for the entire request
+    /// (including reading the full response body).
+    /// Default: 300 s (standard models), 600 s (thinking models).
+    #[serde(default)]
+    pub total_timeout_seconds: Option<u64>,
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
     #[serde(default)]
@@ -278,15 +348,25 @@ pub struct Provider {
     /// provider's own /v1/models endpoint returns nothing.
     #[serde(default)]
     pub manual_models: Vec<String>,
-    /// Enable global inference profiles for cross-region routing (Bedrock only).
-    /// When true, model IDs are prefixed with the region group (e.g., "us.") for
-    /// cross-region inference.
+    /// Enable global inference (Bedrock only).
+    /// When true, AWS auto-selects the optimal region for the request.
+    /// Uses inference profile ARNs instead of model IDs.
     #[serde(default)]
     pub global_inference_profile: bool,
+    /// Enable cross-region inference (Bedrock only).
+    /// When true, model IDs are prefixed with the region group (e.g., "us.") to
+    /// route requests across multiple regions for higher throughput.
+    #[serde(default)]
+    pub cross_region_inference: bool,
     /// Enable prompt caching for supported Bedrock models (Claude 3.5+).
     /// When true, the gateway includes prompt caching headers in requests.
     #[serde(default)]
     pub prompt_caching: bool,
+    /// Use a custom VPC endpoint for Bedrock (Bedrock only).
+    /// When true, the base_url field is used as-is instead of auto-generating
+    /// the Bedrock Mantle endpoint from the region.
+    #[serde(default)]
+    pub custom_vpc_endpoint: bool,
     /// Enable reasoning/extended thinking for supported Bedrock models.
     /// When true, the gateway includes the `thinking` parameter in requests
     /// to models that support extended thinking (Claude 3.5 Sonnet+).
@@ -295,6 +375,38 @@ pub struct Provider {
 }
 
 impl Provider {
+    /// Resolve the effective TTFB timeout for a given model.
+    /// Priority: explicit `ttfb_timeout_seconds` > model-aware default.
+    pub fn effective_ttfb_timeout(&self, model: &str) -> u64 {
+        if let Some(t) = self.ttfb_timeout_seconds {
+            return t;
+        }
+        if is_thinking_model(model) {
+            default_thinking_ttfb_timeout()
+        } else {
+            default_ttfb_timeout()
+        }
+    }
+
+    /// Resolve the effective total (round-trip) timeout for a given model.
+    /// Priority: explicit `total_timeout_seconds` > legacy `timeout_seconds`
+    /// (when non-default) > model-aware default.
+    pub fn effective_total_timeout(&self, model: &str) -> u64 {
+        if let Some(t) = self.total_timeout_seconds {
+            return t;
+        }
+        // If the user set the legacy field to something other than the old
+        // default (30), honour it as the total timeout for backward compat.
+        if self.timeout_seconds != default_request_timeout() {
+            return self.timeout_seconds;
+        }
+        if is_thinking_model(model) {
+            default_thinking_total_timeout()
+        } else {
+            default_total_timeout()
+        }
+    }
+
     /// Resolve API key from environment variable at runtime
     /// Returns None if no api_key_env is configured or the environment variable is unset
     pub fn resolve_api_key(&self) -> Option<String> {
@@ -724,6 +836,8 @@ mod runtime_resolution_tests {
             resolved_api_secret: None,
             region: None,
             timeout_seconds: 30,
+            ttfb_timeout_seconds: None,
+            total_timeout_seconds: None,
             max_connections: 100,
             rate_limit_per_minute: 0,
             custom_headers: HashMap::new(),
@@ -731,6 +845,8 @@ mod runtime_resolution_tests {
             budget: None,
             manual_models: vec![],
             global_inference_profile: false,
+            cross_region_inference: false,
+            custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
         };
@@ -754,6 +870,8 @@ mod runtime_resolution_tests {
             resolved_api_secret: None,
             region: None,
             timeout_seconds: 30,
+            ttfb_timeout_seconds: None,
+            total_timeout_seconds: None,
             max_connections: 100,
             rate_limit_per_minute: 0,
             custom_headers: HashMap::new(),
@@ -761,6 +879,8 @@ mod runtime_resolution_tests {
             budget: None,
             manual_models: vec![],
             global_inference_profile: false,
+            cross_region_inference: false,
+            custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
         };
@@ -788,6 +908,8 @@ mod runtime_resolution_tests {
             resolved_api_secret: None,
             region: None,
             timeout_seconds: 30,
+            ttfb_timeout_seconds: None,
+            total_timeout_seconds: None,
             max_connections: 100,
             rate_limit_per_minute: 0,
             custom_headers: headers,
@@ -795,6 +917,8 @@ mod runtime_resolution_tests {
             budget: None,
             manual_models: vec![],
             global_inference_profile: false,
+            cross_region_inference: false,
+            custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
         };
@@ -820,6 +944,8 @@ mod runtime_resolution_tests {
             resolved_api_secret: None,
             region: None,
             timeout_seconds: 30,
+            ttfb_timeout_seconds: None,
+            total_timeout_seconds: None,
             max_connections: 100,
             rate_limit_per_minute: 0,
             custom_headers: HashMap::new(),
@@ -827,6 +953,8 @@ mod runtime_resolution_tests {
             budget: None,
             manual_models: vec![],
             global_inference_profile: false,
+            cross_region_inference: false,
+            custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
         };
@@ -848,6 +976,8 @@ mod runtime_resolution_tests {
             resolved_api_secret: None,
             region: None,
             timeout_seconds: 30,
+            ttfb_timeout_seconds: None,
+            total_timeout_seconds: None,
             max_connections: 100,
             rate_limit_per_minute: 0,
             custom_headers: HashMap::new(),
@@ -855,6 +985,8 @@ mod runtime_resolution_tests {
             budget: None,
             manual_models: vec![],
             global_inference_profile: false,
+            cross_region_inference: false,
+            custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
         };

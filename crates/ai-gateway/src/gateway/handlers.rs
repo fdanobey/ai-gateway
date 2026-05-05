@@ -132,9 +132,13 @@ impl IntoResponse for GatewayError {
                 StatusCode::TOO_MANY_REQUESTS,
                 serde_json::json!({ "error": { "message": format!("Rate limit exceeded for provider: {}", provider), "type": "rate_limit_error" } }),
             ),
-            GatewayError::Timeout(secs) => (
+            GatewayError::TtfbTimeout(secs) => (
                 StatusCode::GATEWAY_TIMEOUT,
-                serde_json::json!({ "error": { "message": format!("Request timeout after {}s", secs), "type": "timeout_error" } }),
+                serde_json::json!({ "error": { "message": format!("Provider did not respond within {}s (time-to-first-byte timeout). The model may need more time to start generating — consider increasing ttfb_timeout_seconds.", secs), "type": "ttfb_timeout_error" } }),
+            ),
+            GatewayError::TotalTimeout(secs) => (
+                StatusCode::GATEWAY_TIMEOUT,
+                serde_json::json!({ "error": { "message": format!("Request exceeded {}s total round-trip timeout. The response may be too large or the model too slow — consider increasing total_timeout_seconds.", secs), "type": "total_timeout_error" } }),
             ),
             GatewayError::Provider { provider: _, message: _, status_code } => {
                 let sc = status_code

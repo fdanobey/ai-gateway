@@ -367,8 +367,8 @@ impl Router {
         let api_key = provider_cfg.resolve_api_key().unwrap_or_default();
         
         // Build base URL — strip trailing slash, append /v1 if not present
-        // For Bedrock with API key, use the Bedrock Mantle endpoint
-        let mut base_url = if provider_cfg.provider_type == "bedrock" && !api_key.is_empty() {
+        // For Bedrock with API key, use the Bedrock Mantle endpoint (unless custom VPC endpoint)
+        let mut base_url = if provider_cfg.provider_type == "bedrock" && !api_key.is_empty() && !provider_cfg.custom_vpc_endpoint {
             // Bedrock API key mode: use Bedrock Mantle endpoint (OpenAI-compatible)
             let region = provider_cfg.region.as_deref().unwrap_or("us-east-1");
             format!("https://bedrock-mantle.{}.api.aws/v1", region)
@@ -380,13 +380,17 @@ impl Router {
             base_url.push_str("/v1");
         }
         let url = format!("{}/chat/completions", base_url);
-        tracing::info!(provider = provider_name, %url, model = %provider_model.model, "Calling provider");
         
-        let timeout = Duration::from_secs(provider_cfg.timeout_seconds);
+        let ttfb_timeout_secs = provider_cfg.effective_ttfb_timeout(&provider_model.model);
+        let total_timeout_secs = provider_cfg.effective_total_timeout(&provider_model.model);
+        let ttfb_timeout = Duration::from_secs(ttfb_timeout_secs);
+        let total_timeout = Duration::from_secs(total_timeout_secs);
+        tracing::info!(provider = provider_name, %url, model = %provider_model.model, ttfb_timeout_secs, total_timeout_secs, "Calling provider");
+        
         let pool_config = provider_cfg.connection_pool.clone();
         let mut custom_headers = provider_cfg.custom_headers.clone();
         let provider_type = provider_cfg.provider_type.clone();
-        let global_inference_profile = provider_cfg.global_inference_profile;
+        let cross_region_inference = provider_cfg.cross_region_inference;
         let prompt_caching = provider_cfg.prompt_caching;
         let reasoning = provider_cfg.reasoning;
         let provider_region = provider_cfg.region.clone();
@@ -396,7 +400,7 @@ impl Router {
         // Drop config lock before making HTTP calls
         drop(config);
         
-        let http_client = self.get_or_create_http_client(provider_name, timeout, &pool_config)?;
+        let http_client = self.get_or_create_http_client(provider_name, &pool_config)?;
         
         // Build the outgoing request body — override model to the actual provider model name
         // Always request non-streaming from provider; gateway handles client streaming separately
@@ -412,8 +416,8 @@ impl Router {
         outgoing.stream = false;
         let mut context_retry_attempt: usize = 0;
 
-        // Apply global inference profile prefix for Bedrock providers
-        if provider_type == "bedrock" && global_inference_profile {
+        // Apply cross-region inference prefix for Bedrock providers
+        if provider_type == "bedrock" && cross_region_inference {
             let region = provider_region.as_deref().unwrap_or("us-east-1");
             outgoing.model = apply_global_inference_prefix(&outgoing.model, region, true);
         }
@@ -443,6 +447,12 @@ impl Router {
                 "Sanitized request for provider (removed unsupported fields)"
             );
         }
+
+        // Normalize tool_calls on assistant messages to always be an array.
+        // Some clients send tool_calls as a single object or other non-array
+        // shapes, which causes downstream providers to reject with:
+        //   "assistant.tool_calls must be an array when provided"
+        Self::normalize_message_tool_calls(&mut outgoing.messages);
 
         // Reverse-translate tool_calls history for models that use XML-style tool use.
         //
@@ -551,15 +561,60 @@ If no tool is needed, respond normally with plain assistant text and no `tool_ca
                 req_builder = req_builder.header(k.as_str(), v.as_str());
             }
             
-            let result = req_builder.json(&outgoing).send().await;
-            
-            match result {
+            let request_start = std::time::Instant::now();
+            let result = tokio::time::timeout(ttfb_timeout, req_builder.json(&outgoing).send()).await;
+
+            let send_result = match result {
+                Ok(inner) => inner,
+                Err(_) => {
+                    // TTFB timeout — provider didn't start responding in time
+                    warn!(
+                        provider = provider_name,
+                        attempt,
+                        ttfb_timeout_secs,
+                        "TTFB timeout — provider did not respond in time"
+                    );
+                    last_error = Some(GatewayError::TtfbTimeout(ttfb_timeout_secs));
+                    continue;
+                }
+            };
+
+            match send_result {
                 Ok(response) => {
                     let status = response.status();
                     let status_code = status.as_u16();
                     
-                    // Read body as text first so we can log it on failure
-                    let body_text = response.text().await.unwrap_or_default();
+                    // Read body with remaining total timeout budget
+                    let elapsed = request_start.elapsed();
+                    let remaining_total = total_timeout.saturating_sub(elapsed);
+                    let body_result = tokio::time::timeout(remaining_total, response.text()).await;
+                    let body_text = match body_result {
+                        Ok(Ok(text)) => text,
+                        Ok(Err(e)) => {
+                            warn!(
+                                provider = provider_name,
+                                attempt,
+                                error = %e,
+                                "Failed to read response body"
+                            );
+                            last_error = Some(GatewayError::Provider {
+                                provider: provider_name.to_string(),
+                                message: format!("Failed to read response body: {}", e),
+                                status_code: Some(status_code),
+                            });
+                            continue;
+                        }
+                        Err(_) => {
+                            warn!(
+                                provider = provider_name,
+                                attempt,
+                                total_timeout_secs,
+                                "Total timeout — response body read exceeded round-trip limit"
+                            );
+                            last_error = Some(GatewayError::TotalTimeout(total_timeout_secs));
+                            continue;
+                        }
+                    };
                     tracing::info!(provider = provider_name, status = status_code, body_len = body_text.len(), "Provider responded");
                     
                     if status.is_success() {
@@ -2401,6 +2456,60 @@ If no tool is needed, respond normally with plain assistant text and no `tool_ca
         }
     }
 
+    /// Ensure `tool_calls` on every message is either a JSON array or absent.
+    ///
+    /// Some clients (or intermediate proxies) send `tool_calls` as a single
+    /// object, null, or other non-array shape.  Downstream providers reject
+    /// this with `"assistant.tool_calls must be an array when provided"`.
+    ///
+    /// Rules:
+    ///   - Already an array → keep as-is.
+    ///   - Single object with `id`+`function` → wrap in a one-element array.
+    ///   - Null / other → remove the key entirely.
+    fn normalize_message_tool_calls(messages: &mut [Message]) {
+        for msg in messages.iter_mut() {
+            let Some(tc_val) = msg.extra.remove("tool_calls") else {
+                continue;
+            };
+            match tc_val {
+                serde_json::Value::Array(arr) => {
+                    // Already correct shape — put it back.
+                    if !arr.is_empty() {
+                        msg.extra.insert(
+                            "tool_calls".to_string(),
+                            serde_json::Value::Array(arr),
+                        );
+                    }
+                    // Empty array → drop it to avoid confusing providers.
+                }
+                serde_json::Value::Object(ref obj)
+                    if obj.contains_key("id") || obj.contains_key("function") =>
+                {
+                    // Single tool_call object → wrap in array.
+                    warn!(
+                        role = %msg.role,
+                        "tool_calls was a single object, wrapping in array"
+                    );
+                    msg.extra.insert(
+                        "tool_calls".to_string(),
+                        serde_json::Value::Array(vec![tc_val]),
+                    );
+                }
+                serde_json::Value::Null => {
+                    // Null → just drop it.
+                }
+                other => {
+                    warn!(
+                        role = %msg.role,
+                        value_type = %other,
+                        "Dropping malformed tool_calls (not an array or object)"
+                    );
+                    // Drop it — better to omit than send garbage.
+                }
+            }
+        }
+    }
+
     pub fn should_cache_response(response: &OpenAIResponse) -> bool {
         let Some(choice) = response.choices.first() else {
             return false;
@@ -2462,7 +2571,6 @@ If no tool is needed, respond normally with plain assistant text and no `tool_ca
     fn get_or_create_http_client(
         &self,
         provider_name: &str,
-        timeout: Duration,
         pool_config: &crate::config::ProviderConnectionPoolConfig,
     ) -> Result<reqwest::Client, GatewayError> {
         if let Some(existing) = self.http_clients.get(provider_name) {
@@ -2470,7 +2578,6 @@ If no tool is needed, respond normally with plain assistant text and no `tool_ca
         }
 
         let http_client = reqwest::Client::builder()
-            .timeout(timeout)
             .connect_timeout(Duration::from_secs(10))
             .tcp_keepalive(Duration::from_secs(30))
             .pool_max_idle_per_host(pool_config.max_idle_per_host as usize)
@@ -2722,8 +2829,8 @@ mod tests {
     fn test_http_client_reused_per_provider() {
         let router = Router::new(Arc::new(RwLock::new(create_test_config())), test_metrics());
         let pool_config = crate::config::ProviderConnectionPoolConfig::default();
-        let _client1 = router.get_or_create_http_client("provider-a", Duration::from_secs(30), &pool_config).unwrap();
-        let _client2 = router.get_or_create_http_client("provider-a", Duration::from_secs(30), &pool_config).unwrap();
+        let _client1 = router.get_or_create_http_client("provider-a", &pool_config).unwrap();
+        let _client2 = router.get_or_create_http_client("provider-a", &pool_config).unwrap();
         assert_eq!(router.http_clients.len(), 1);
     }
 
@@ -2775,6 +2882,8 @@ mod tests {
             resolved_api_secret: None,
             region: None,
             timeout_seconds: 30,
+            ttfb_timeout_seconds: None,
+            total_timeout_seconds: None,
             max_connections: 10,
             rate_limit_per_minute: 0,
             custom_headers: Default::default(),
@@ -2785,6 +2894,8 @@ mod tests {
             }),
             manual_models: vec![],
             global_inference_profile: false,
+            cross_region_inference: false,
+            custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
         }];

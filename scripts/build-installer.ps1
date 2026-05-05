@@ -35,7 +35,7 @@ Write-Host "Step 2: Compiling installer with $iscc ..." -ForegroundColor Cyan
 & $iscc $issFile
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed" }
 
-$version = "0.1.0"
+$version = "0.1.1"
 $output  = "release\OBEY-API-Gateway-Setup-$version.exe"
 if (Test-Path $output) {
     $hash = (Get-FileHash $output -Algorithm SHA256).Hash.ToLower()

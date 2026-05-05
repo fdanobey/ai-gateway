@@ -1,4 +1,4 @@
-﻿use axum::{
+use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Path, Query, State},
     http::{header, StatusCode},
@@ -230,6 +230,8 @@ mod tests {
                 resolved_api_secret: None,
                 region: None,
                 timeout_seconds: 30,
+                ttfb_timeout_seconds: None,
+                total_timeout_seconds: None,
                 max_connections: 10,
                 rate_limit_per_minute: 0,
                 custom_headers: Default::default(),
@@ -237,6 +239,8 @@ mod tests {
                 budget: None,
                 manual_models: vec![],
                 global_inference_profile: false,
+                cross_region_inference: false,
+                custom_vpc_endpoint: false,
                 prompt_caching: false,
                 reasoning: true,
             }],
