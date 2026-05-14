@@ -121,6 +121,23 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
   main{padding:1rem}
   .status-bar{left:180px}
 }
+
+/* OAuth provider fields */
+.oauth-fields{display:none;border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-top:.75rem;background:var(--surface)}
+.oauth-fields-title{font-weight:600;font-size:.875rem;margin-bottom:.25rem;color:var(--text)}
+.oauth-fields-desc{font-size:.8rem;color:var(--text-muted);margin-bottom:.75rem}
+.oauth-fields-status{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem}
+.oauth-state-label{font-weight:600;font-size:.8rem}
+.oauth-state-badge{font-size:.75rem;padding:.15rem .5rem;border-radius:999px;font-weight:500}
+.oauth-state-badge.state-authenticated{background:rgba(25,135,84,.1);color:var(--success);border:1px solid rgba(25,135,84,.25)}
+.oauth-state-badge.state-expired{background:rgba(220,53,69,.08);color:var(--danger);border:1px solid rgba(220,53,69,.25)}
+.oauth-state-badge.state-unauthenticated{background:rgba(108,117,125,.08);color:var(--text-muted);border:1px solid rgba(108,117,125,.18)}
+.oauth-state-badge.state-refreshing{background:rgba(13,110,253,.08);color:var(--primary);border:1px solid rgba(13,110,253,.2)}
+.oauth-fields-actions{display:flex;gap:.5rem;align-items:center}
+.oauth-fields-msg{margin-top:.6rem;font-size:.75rem;padding:.4rem .6rem;border-radius:var(--radius);border:1px solid var(--border)}
+.oauth-fields-msg.msg-info{background:rgba(13,110,253,.05);border-color:rgba(13,110,253,.2);color:var(--primary)}
+.oauth-fields-msg.msg-error{background:rgba(220,53,69,.05);border-color:rgba(220,53,69,.2);color:var(--danger)}
+.oauth-fields-msg.msg-success{background:rgba(25,135,84,.05);border-color:rgba(25,135,84,.2);color:var(--success)}
 </style>
 </head>
 <body>
@@ -238,6 +255,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
             <label>Type</label>
             <select class="prov-type">
               <option value="openai">OpenAI</option>
+              <option value="openai_oauth">OpenAI (Browser Login)</option>
               <option value="ollama">Ollama</option>
               <option value="bedrock">AWS Bedrock</option>
               <option value="groq">Groq</option>
@@ -374,6 +392,19 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
             <label>Enable reasoning</label>
           </div>
           <button type="button" class="btn btn-secondary btn-sm btn-refresh-models" style="margin-top:.5rem">Refresh Models</button>
+        </div>
+        <div class="oauth-fields">
+          <div class="oauth-fields-title">OpenAI Browser Login</div>
+          <div class="oauth-fields-desc">Sign in with your ChatGPT Plus/Pro subscription. No API key needed.</div>
+          <div class="oauth-fields-status">
+            <span class="oauth-state-label">Status:</span>
+            <span class="oauth-state-badge state-unauthenticated prov-oauth-badge">Checking…</span>
+          </div>
+          <div class="oauth-fields-actions">
+            <button type="button" class="btn btn-primary btn-sm prov-oauth-login">Sign in with OpenAI</button>
+            <button type="button" class="btn btn-danger btn-sm prov-oauth-logout" style="display:none">Sign Out</button>
+          </div>
+          <div class="oauth-fields-msg prov-oauth-msg" style="display:none"></div>
         </div>
         <div style="margin-top:.5rem">
           <button class="btn btn-secondary btn-sm test-connection">Test Connection</button>
@@ -1193,7 +1224,8 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
     card.dataset.apiKeyConfigured = (data && data.api_key_configured) ? 'true' : 'false';
     if (data) {
       nameInput.value = data.name || ''; titleEl.textContent = data.name || 'New Provider';
-      card.querySelector('.prov-type').value = data.type || 'openai';
+      var uiType = (data.type === 'openai' && data.auth_method === 'oauth') ? 'openai_oauth' : (data.type || 'openai');
+      card.querySelector('.prov-type').value = uiType;
       card.querySelector('.prov-url').value = data.base_url || '';
       keyInput.value = data.api_key_env || '';
       card.querySelector('.prov-timeout').value = data.timeout_seconds || 30;
@@ -1223,9 +1255,11 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
     // --- Bedrock visibility toggle & region-URL binding (Req 1.1, 1.2, 2.1, 2.2, 2.3) ---
     var typeSelect = card.querySelector('.prov-type');
     var bedrockFields = card.querySelector('.bedrock-fields');
+    var oauthFields = card.querySelector('.oauth-fields');
     var urlInput = card.querySelector('.prov-url');
     var regionSelect = card.querySelector('.prov-region');
     var bedrockUrlInput = card.querySelector('.prov-bedrock-url');
+    var keyGroup = card.querySelector('.prov-key-env').closest('.form-group');
 
     function buildMantleUrl(region) {
       return 'https://bedrock-mantle.' + region + '.api.aws/v1';
@@ -1233,9 +1267,10 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
 
     function syncBedrockVisibility() {
       var isBedrock = typeSelect.value === 'bedrock';
+      var isOAuth = typeSelect.value === 'openai_oauth';
       bedrockFields.style.display = isBedrock ? 'block' : 'none';
+      oauthFields.style.display = isOAuth ? 'block' : 'none';
       if (isBedrock) {
-        // Ensure region has a valid value (default to us-east-1)
         if (!regionSelect.value) {
           regionSelect.value = 'us-east-1';
         }
@@ -1244,11 +1279,19 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
         bedrockUrlInput.value = mantleUrl;
         urlInput.value = mantleUrl;
         urlInput.readOnly = true;
-        // Hide the generic Base URL row for bedrock since the bedrock-fields section has its own
         urlInput.closest('.form-group').style.display = 'none';
+        keyGroup.style.display = '';
+      } else if (isOAuth) {
+        urlInput.value = 'https://api.openai.com/v1';
+        urlInput.readOnly = true;
+        urlInput.closest('.form-group').style.display = 'none';
+        keyGroup.style.display = 'none';
+        // Fetch OAuth status for this card
+        fetchOAuthStatusForCard(card);
       } else {
         urlInput.readOnly = false;
         urlInput.closest('.form-group').style.display = '';
+        keyGroup.style.display = '';
       }
     }
 
@@ -1280,7 +1323,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
         tempSelect.style.cssText = 'width:100%;padding:.5rem .75rem;border:1px solid var(--border);border-radius:var(--radius);font-size:.875rem;margin-top:.5rem';
         card.querySelector('.btn-refresh-models').insertAdjacentElement('afterend', tempSelect);
       }
-      fetchModelsForBedrock(region, apiKey, globalInference, tempSelect, '', manualModels);
+      fetchModelsForBedrock(region, apiKey, globalInference, tempSelect, '', manualModels, card.querySelector('.prov-name').value.trim());
       setStatus('Fetching Bedrock models for ' + region + '…');
     });
 
@@ -1304,7 +1347,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
         var region = regionSelect.value || 'us-east-1';
         var apiKey = card.querySelector('.prov-key-env').value.trim();
         var mantleBase = 'https://bedrock-mantle.' + region + '.api.aws/v1';
-        var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(mantleBase) + '&api_key=' + encodeURIComponent(apiKey || '');
+        var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(mantleBase) + '&api_key=' + encodeURIComponent(apiKey || '') + '&provider_name=' + encodeURIComponent(name);
         fetch(proxyUrl, {
           method: 'GET',
           signal: AbortSignal.timeout(10000)
@@ -1328,7 +1371,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
       } else {
         // Non-bedrock: proxy through backend to avoid CORS with 10s timeout
         var provApiKey = card.querySelector('.prov-key-env').value.trim();
-        var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(url) + '&api_key=' + encodeURIComponent(provApiKey || '');
+        var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(url) + '&api_key=' + encodeURIComponent(provApiKey || '') + '&provider_name=' + encodeURIComponent(name);
         fetch(proxyUrl, { method: 'GET', signal: AbortSignal.timeout(10000) })
           .then(function(resp) {
             if (resp.ok) { resultEl.textContent = '✓ Reachable'; resultEl.style.color = 'var(--success)'; setStatus('Connection test passed for ' + name); }
@@ -1339,6 +1382,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
       }
     });
     renderProviderKeyStatus(card);
+    wireOAuthButtons(card);
     provList.appendChild(clone);
   }
 
@@ -1416,7 +1460,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
     selectEl.innerHTML = '<option value="">Loading…</option>';
     // Proxy through backend to avoid CORS issues with external provider APIs
     var apiKey = getProviderApiKey(providerName);
-    var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(baseUrl) + '&api_key=' + encodeURIComponent(apiKey || '');
+    var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(baseUrl) + '&api_key=' + encodeURIComponent(apiKey || '') + '&provider_name=' + encodeURIComponent(providerName);
     fetch(proxyUrl, { signal: AbortSignal.timeout(12000) })
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function(data) {
@@ -1455,12 +1499,12 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
   }
 
   // --- Bedrock Model Auto-Discovery (Req 5.1, 5.2, 5.3, 5.4, 5.5) ---
-  function fetchModelsForBedrock(region, apiKey, globalInference, selectEl, currentModel, manualModels) {
+  function fetchModelsForBedrock(region, apiKey, globalInference, selectEl, currentModel, manualModels, providerName) {
     var mantleBase = 'https://bedrock-mantle.' + region + '.api.aws/v1';
     selectEl.innerHTML = '<option value="">Loading…</option>';
 
     // Proxy through backend to avoid CORS issues
-    var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(mantleBase) + '&api_key=' + encodeURIComponent(apiKey || '');
+    var proxyUrl = apiUrl('providers/models') + '?base_url=' + encodeURIComponent(mantleBase) + '&api_key=' + encodeURIComponent(apiKey || '') + '&provider_name=' + encodeURIComponent(providerName || '');
     fetch(proxyUrl, { signal: AbortSignal.timeout(12000) })
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function(data) {
@@ -1639,7 +1683,7 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
     cfg.server = { host:document.getElementById('srv-host').value.trim(), port:parseInt(document.getElementById('srv-port').value,10), request_timeout_seconds:parseInt(document.getElementById('srv-timeout').value,10), max_request_size_mb:parseInt(document.getElementById('srv-max-body').value,10) };
     cfg.tls=document.getElementById('tls-enabled').checked?{enabled:true,cert_path:document.getElementById('tls-cert').value.trim(),key_path:document.getElementById('tls-key').value.trim()}:null;
     cfg.admin=cfg.admin||{}; cfg.admin.enabled=cfg.admin.enabled!==false; cfg.admin.path=document.getElementById('admin-path').value.trim(); cfg.admin.auth={enabled:document.getElementById('admin-auth-enabled').checked,username_env:document.getElementById('admin-user-env').value.trim()||null,password_env:document.getElementById('admin-pass-env').value.trim()||null};
-    cfg.providers=[]; document.querySelectorAll('#providers-list .item-card').forEach(function(card){var ttfbVal=card.querySelector('.prov-ttfb-timeout').value.trim();var totalVal=card.querySelector('.prov-total-timeout').value.trim();var p={name:card.querySelector('.prov-name').value.trim(),type:card.querySelector('.prov-type').value,base_url:card.querySelector('.prov-url').value.trim(),api_key_env:card.querySelector('.prov-key-env').value.trim()||null,api_key_status:card.dataset.apiKeyStatus||'missing',api_key_configured:card.dataset.apiKeyConfigured==='true',timeout_seconds:parseInt(card.querySelector('.prov-timeout').value,10),ttfb_timeout_seconds:ttfbVal?parseInt(ttfbVal,10):null,total_timeout_seconds:totalVal?parseInt(totalVal,10):null,rate_limit_per_minute:parseInt(card.querySelector('.prov-rate').value,10),max_connections:parseInt(card.querySelector('.prov-max-conn').value,10),connection_pool:{max_idle_per_host:parseInt(card.querySelector('.prov-pool-max-idle').value,10),idle_timeout_seconds:parseInt(card.querySelector('.prov-pool-idle-timeout').value,10)}};var r=card.querySelector('.prov-region').value.trim();if(r)p.region=r;if(p.type==='bedrock'){var bedrockRegion=r||'us-east-1';p.base_url='https://bedrock-mantle.'+bedrockRegion+'.api.aws/v1';if(!p.region)p.region=bedrockRegion;}var budgetLimit=card.querySelector('.prov-budget-limit').value.trim();if(budgetLimit){p.budget={limit_usd:parseFloat(budgetLimit),reset_policy:card.querySelector('.prov-budget-reset').value};}var mm=card.querySelector('.prov-manual-models').value.split('\n').map(function(s){return s.trim();}).filter(Boolean);if(mm.length)p.manual_models=mm;if(p.type==='bedrock'){p.global_inference_profile=card.querySelector('.prov-global-inference').checked;p.cross_region_inference=card.querySelector('.prov-cross-region').checked;p.prompt_caching=card.querySelector('.prov-prompt-caching').checked;p.custom_vpc_endpoint=card.querySelector('.prov-custom-vpc').checked;p.reasoning=card.querySelector('.prov-reasoning').checked;}cfg.providers.push(p);});
+    cfg.providers=[]; document.querySelectorAll('#providers-list .item-card').forEach(function(card){var ttfbVal=card.querySelector('.prov-ttfb-timeout').value.trim();var totalVal=card.querySelector('.prov-total-timeout').value.trim();var p={name:card.querySelector('.prov-name').value.trim(),type:card.querySelector('.prov-type').value,base_url:card.querySelector('.prov-url').value.trim(),api_key_env:card.querySelector('.prov-key-env').value.trim()||null,api_key_status:card.dataset.apiKeyStatus||'missing',api_key_configured:card.dataset.apiKeyConfigured==='true',timeout_seconds:parseInt(card.querySelector('.prov-timeout').value,10),ttfb_timeout_seconds:ttfbVal?parseInt(ttfbVal,10):null,total_timeout_seconds:totalVal?parseInt(totalVal,10):null,rate_limit_per_minute:parseInt(card.querySelector('.prov-rate').value,10),max_connections:parseInt(card.querySelector('.prov-max-conn').value,10),connection_pool:{max_idle_per_host:parseInt(card.querySelector('.prov-pool-max-idle').value,10),idle_timeout_seconds:parseInt(card.querySelector('.prov-pool-idle-timeout').value,10)}};var r=card.querySelector('.prov-region').value.trim();if(r)p.region=r;if(p.type==='bedrock'){var bedrockRegion=r||'us-east-1';p.base_url='https://bedrock-mantle.'+bedrockRegion+'.api.aws/v1';if(!p.region)p.region=bedrockRegion;}var budgetLimit=card.querySelector('.prov-budget-limit').value.trim();if(budgetLimit){p.budget={limit_usd:parseFloat(budgetLimit),reset_policy:card.querySelector('.prov-budget-reset').value};}var mm=card.querySelector('.prov-manual-models').value.split('\n').map(function(s){return s.trim();}).filter(Boolean);if(mm.length)p.manual_models=mm;if(p.type==='bedrock'){p.global_inference_profile=card.querySelector('.prov-global-inference').checked;p.cross_region_inference=card.querySelector('.prov-cross-region').checked;p.prompt_caching=card.querySelector('.prov-prompt-caching').checked;p.custom_vpc_endpoint=card.querySelector('.prov-custom-vpc').checked;p.reasoning=card.querySelector('.prov-reasoning').checked;}if(p.type==='openai_oauth'){p.type='openai';p.auth_method='oauth';p.base_url='https://api.openai.com/v1';p.api_key_env=null;}cfg.providers.push(p);});
     cfg.model_groups=[]; document.querySelectorAll('#groups-list .item-card').forEach(function(card){var g={name:card.querySelector('.grp-name').value.trim(),version_fallback_enabled:card.querySelector('.grp-version-fallback').checked,models:[]};card.querySelectorAll('.models-container .form-row').forEach(function(row){g.models.push({provider:(row.querySelector('.mdl-provider')||{}).value||'',model:(row.querySelector('.mdl-name')||{}).value||'',priority:parseInt((row.querySelector('.mdl-priority')||{}).value||'100',10),cost_per_million_input_tokens:parseFloat((row.querySelector('.mdl-cost-in')||{}).value||'0'),cost_per_million_output_tokens:parseFloat((row.querySelector('.mdl-cost-out')||{}).value||'0')});});cfg.model_groups.push(g);});
     var retryMax=parseInt(document.getElementById('retry-max').value,10);
     var retryBackoff=parseFloat(document.getElementById('retry-backoff').value);
@@ -1707,6 +1751,102 @@ padding:.4rem 1rem;font-size:.75rem;color:var(--text-muted);display:flex;justify
     }).catch(function(err){setStatus('Import failed: '+err.message);showToast('Import failed: '+err.message,true);});
     this.value='';
   });
+
+  // --- OAuth Provider Helpers ---
+  function fetchOAuthStatusForCard(card) {
+    var badge = card.querySelector('.prov-oauth-badge');
+    var loginBtn = card.querySelector('.prov-oauth-login');
+    var logoutBtn = card.querySelector('.prov-oauth-logout');
+    fetch(apiUrl('oauth/openai/status'))
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(data) {
+        var state = data.state || 'unauthenticated';
+        badge.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+        badge.className = 'oauth-state-badge prov-oauth-badge state-' + state;
+        loginBtn.style.display = (state === 'authenticated' || state === 'refreshing') ? 'none' : '';
+        logoutBtn.style.display = (state === 'authenticated' || state === 'refreshing') ? '' : 'none';
+      })
+      .catch(function() {
+        badge.textContent = 'Unavailable';
+        badge.className = 'oauth-state-badge prov-oauth-badge state-unauthenticated';
+      });
+  }
+
+  function wireOAuthButtons(card) {
+    var loginBtn = card.querySelector('.prov-oauth-login');
+    var logoutBtn = card.querySelector('.prov-oauth-logout');
+    var msgEl = card.querySelector('.prov-oauth-msg');
+
+    loginBtn.addEventListener('click', function() {
+      loginBtn.disabled = true;
+      msgEl.style.display = 'none';
+      setStatus('Initiating OpenAI OAuth login…');
+      fetch(apiUrl('oauth/openai/login'), { method: 'POST' })
+        .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+        .then(function(res) {
+          if (!res.ok) {
+            msgEl.textContent = res.data.error ? res.data.error.message : 'Login failed';
+            msgEl.className = 'oauth-fields-msg prov-oauth-msg msg-error';
+            msgEl.style.display = 'block';
+            setStatus('OAuth login failed');
+            return;
+          }
+          if (res.data.status === 'manual_required') {
+            msgEl.textContent = 'Browser could not open. ';
+            msgEl.className = 'oauth-fields-msg prov-oauth-msg msg-info';
+            var link = document.createElement('a');
+            link.href = res.data.auth_url; link.target = '_blank'; link.rel = 'noopener';
+            link.textContent = 'Click here to sign in';
+            msgEl.appendChild(link);
+            msgEl.style.display = 'block';
+            setStatus('OAuth: manual browser navigation required');
+          } else {
+            msgEl.textContent = 'Browser opened — complete sign-in there.';
+            msgEl.className = 'oauth-fields-msg prov-oauth-msg msg-success';
+            msgEl.style.display = 'block';
+            setStatus('OAuth login initiated');
+            var pollCount = 0;
+            var pollInterval = setInterval(function() {
+              pollCount++;
+              fetchOAuthStatusForCard(card);
+              var badge = card.querySelector('.prov-oauth-badge');
+              if (badge.textContent === 'Authenticated') {
+                clearInterval(pollInterval);
+                msgEl.textContent = 'Signed in successfully.';
+                msgEl.className = 'oauth-fields-msg prov-oauth-msg msg-success';
+                setStatus('OAuth login complete');
+              }
+              if (pollCount > 60) clearInterval(pollInterval);
+            }, 2000);
+          }
+        })
+        .catch(function(err) {
+          msgEl.textContent = 'Request failed: ' + err.message;
+          msgEl.className = 'oauth-fields-msg prov-oauth-msg msg-error';
+          msgEl.style.display = 'block';
+        })
+        .finally(function() { loginBtn.disabled = false; });
+    });
+
+    logoutBtn.addEventListener('click', function() {
+      logoutBtn.disabled = true;
+      msgEl.style.display = 'none';
+      fetch(apiUrl('oauth/openai/logout'), { method: 'POST' })
+        .then(function() {
+          msgEl.textContent = 'Signed out.';
+          msgEl.className = 'oauth-fields-msg prov-oauth-msg msg-info';
+          msgEl.style.display = 'block';
+          setStatus('OAuth: signed out');
+          fetchOAuthStatusForCard(card);
+        })
+        .catch(function(err) {
+          msgEl.textContent = 'Logout failed: ' + err.message;
+          msgEl.className = 'oauth-fields-msg prov-oauth-msg msg-error';
+          msgEl.style.display = 'block';
+        })
+        .finally(function() { logoutBtn.disabled = false; });
+    });
+  }
 
   // --- Init: load config on startup ---
   loadConfig();

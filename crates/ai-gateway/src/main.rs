@@ -9,6 +9,7 @@ mod context;
 mod providers;
 mod router;
 mod cache;
+mod codex;
 mod logger;
 mod admin;
 mod dashboard;
@@ -16,6 +17,7 @@ mod models;
 mod error;
 mod gateway;
 mod metrics;
+mod oauth;
 mod secrets;
 #[cfg(feature = "tray")]
 mod tray;

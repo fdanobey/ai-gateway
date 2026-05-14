@@ -113,6 +113,19 @@ cors:
   allowed_methods: ["GET", "POST", "OPTIONS"]
   allowed_headers: ["Content-Type", "Authorization"]
 
+# Tier-1 in-memory exact-match response cache.
+# Caches deterministic chat completions across stream and non-stream calls.
+# Eligibility: temperature <= temperature_threshold AND n == 1.
+# Tool-using requests ARE cached here (key includes tools/tool_choice).
+# Defaults shown; the section can be omitted entirely to use them.
+exact_cache:
+  enabled: true
+  max_entries: 5000
+  ttl_seconds: 3600
+  temperature_threshold: 0.15
+
+# Tier-2 semantic (paraphrase-match) cache, backed by Qdrant.
+# Optional; requires Qdrant + an embedding provider. Skipped for tool requests.
 # semantic_cache:
 #   enabled: true
 #   qdrant_url: "http://localhost:6334"   # gRPC port (not 6333 which is REST)

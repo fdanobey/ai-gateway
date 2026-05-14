@@ -41,6 +41,9 @@ pub enum ValidationError {
 
     #[error("Bedrock provider '{0}' requires a region to be configured")]
     MissingBedrockRegion(String),
+
+    #[error("Codex field '{field}' is only valid on oauth+openai providers (provider: '{provider}')")]
+    InvalidCodexField { provider: String, field: String },
 }
 
 pub type ValidationResult<T> = Result<T, Vec<ValidationError>>;
@@ -169,6 +172,60 @@ impl Config {
                 if !env_var.is_empty() && env::var(env_var).is_err() {
                     tracing::warn!("Environment variable '{}' for provider '{}' is not set — provider will be unavailable until configured", env_var, provider.name);
                 }
+            }
+
+            // OAuth auth_method is only supported for OpenAI providers (6.1, 6.5)
+            if provider.auth_method.as_deref() == Some("oauth") && provider.provider_type != "openai" {
+                errors.push(ValidationError::InvalidValue {
+                    field: format!("providers.{}.auth_method", provider.name),
+                    value: "oauth".to_string(),
+                    expected: "auth_method 'oauth' is only supported for provider_type 'openai'".to_string(),
+                });
+            }
+
+            // Codex-specific field validation (Req 10.6)
+            let is_codex_capable = provider.auth_method.as_deref() == Some("oauth")
+                && provider.provider_type == "openai";
+
+            if !is_codex_capable {
+                if provider.codex_base_url_override.is_some() {
+                    errors.push(ValidationError::InvalidCodexField {
+                        provider: provider.name.clone(),
+                        field: "codex_base_url_override".to_string(),
+                    });
+                }
+                if provider.codex_model_override.is_some() {
+                    errors.push(ValidationError::InvalidCodexField {
+                        provider: provider.name.clone(),
+                        field: "codex_model_override".to_string(),
+                    });
+                }
+                if provider.instructions_override.is_some() {
+                    errors.push(ValidationError::InvalidCodexField {
+                        provider: provider.name.clone(),
+                        field: "instructions_override".to_string(),
+                    });
+                }
+            }
+
+            // Req 10.9 — codex_model_override must be non-empty when set
+            if let Some(ref m) = provider.codex_model_override {
+                if m.trim().is_empty() {
+                    errors.push(ValidationError::InvalidCodexField {
+                        provider: provider.name.clone(),
+                        field: "codex_model_override (must be non-empty)".to_string(),
+                    });
+                }
+            }
+
+            // Req 12.6 — ToS warning when Codex provider active with admin auth disabled
+            if is_codex_capable && !self.admin.auth.enabled {
+                tracing::warn!(
+                    provider = %provider.name,
+                    "Codex provider active with admin auth disabled — ToS risk: \
+                     a shared ChatGPT session over an unauthenticated admin panel \
+                     violates OpenAI terms. Enable admin.auth.enabled = true."
+                );
             }
 
             // Bedrock-specific validation (9.1, 9.2)
@@ -379,6 +436,7 @@ mod property_tests {
                 api_key_encrypted: None,
                 api_secret_env: None,
                 api_secret_encrypted: None,
+                auth_method: None,
                 resolved_api_key: None,
                 resolved_api_secret: None,
                 region: None,
@@ -396,6 +454,9 @@ mod property_tests {
                 custom_vpc_endpoint: false,
                 prompt_caching: false,
                 reasoning: true,
+                codex_base_url_override: None,
+                codex_model_override: None,
+                instructions_override: None,
             }],
             model_groups: vec![ModelGroup {
                 name: "test-group".to_string(),
@@ -412,10 +473,12 @@ mod property_tests {
             retry: RetryConfig::default(),
             logging: LoggingConfig::default(),
             semantic_cache: None,
+            exact_cache: ExactCacheConfig::default(),
             prometheus: None,
             context: ContextConfig::default(),
             first_launch_completed: false,
             tray: TrayConfig::default(),
+            codex_instructions_url: None,
         }
     }
 
@@ -648,6 +711,49 @@ model_groups:
         }
     }
 
+    // Feature: openai-oauth-login, OAuth auth_method validation
+    // **Validates: Requirements 6.1, 6.5**
+
+    #[test]
+    fn test_oauth_auth_method_rejected_for_non_openai_provider() {
+        let mut config = minimal_valid_config();
+        config.providers[0].provider_type = "bedrock".to_string();
+        config.providers[0].region = Some("us-east-1".to_string());
+        config.providers[0].auth_method = Some("oauth".to_string());
+
+        let result = config.validate();
+        assert!(result.is_err(), "auth_method 'oauth' on non-openai provider should be rejected");
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| match e {
+                ValidationError::InvalidValue { field, value, .. } =>
+                    field.contains("auth_method") && value == "oauth",
+                _ => false,
+            }),
+            "Should contain InvalidValue error for auth_method"
+        );
+    }
+
+    #[test]
+    fn test_oauth_auth_method_accepted_for_openai_provider() {
+        let mut config = minimal_valid_config();
+        config.providers[0].provider_type = "openai".to_string();
+        config.providers[0].auth_method = Some("oauth".to_string());
+
+        let result = config.validate();
+        assert!(result.is_ok(), "auth_method 'oauth' on openai provider should be accepted: {:?}", result);
+    }
+
+    #[test]
+    fn test_no_auth_method_accepted_for_any_provider() {
+        let mut config = minimal_valid_config();
+        config.providers[0].provider_type = "anthropic".to_string();
+        config.providers[0].auth_method = None;
+
+        let result = config.validate();
+        assert!(result.is_ok(), "No auth_method should be accepted for any provider: {:?}", result);
+    }
+
     // Feature: bedrock-ui-integration, Bedrock validation rules
     // **Validates: Requirements 9.1, 9.2**
 
@@ -713,6 +819,7 @@ model_groups:
                 api_key_encrypted: None,
                 api_secret_env: None,
                 api_secret_encrypted: None,
+                auth_method: None,
                 resolved_api_key: None,
                 resolved_api_secret: None,
                 region: region.map(|s| s.to_string()),
@@ -730,6 +837,9 @@ model_groups:
                 custom_vpc_endpoint: false,
                 prompt_caching,
                 reasoning,
+                codex_base_url_override: None,
+                codex_model_override: None,
+                instructions_override: None,
             };
 
             // Serialize to YAML
@@ -755,6 +865,91 @@ model_groups:
                 deserialized.region, region.map(|s| s.to_string()),
                 "region mismatch after round-trip"
             );
+        }
+    }
+
+    // Feature: openai-oauth-login, Property 6: Backward Compatibility
+    // For all valid Provider YAML configs lacking `auth_method`, deserialization
+    // succeeds and `auth_method` is `None`.
+    // **Validates: Requirements 6.5**
+    proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn prop_provider_without_auth_method_deserializes_with_none(
+            name in "[a-z][a-z0-9_-]{0,20}",
+            provider_type in proptest::sample::select(vec![
+                "openai", "anthropic", "bedrock", "google", "azure", "custom",
+            ]),
+            base_url in proptest::option::of("https://api\\.example\\.com/v1"),
+            api_key_env in proptest::option::of("[A-Z_][A-Z0-9_]{2,20}"),
+            timeout in 1u64..=600u64,
+            max_connections in 1u32..=500u32,
+        ) {
+            // Build a YAML string that does NOT include `auth_method`
+            let mut yaml = format!(
+                "name: \"{name}\"\ntype: \"{provider_type}\"\ntimeout_seconds: {timeout}\nmax_connections: {max_connections}\n"
+            );
+            if let Some(url) = &base_url {
+                yaml.push_str(&format!("base_url: \"{url}\"\n"));
+            }
+            if let Some(key) = &api_key_env {
+                yaml.push_str(&format!("api_key_env: \"{key}\"\n"));
+            }
+
+            // Deserialize — must succeed
+            let provider: Provider = serde_yaml::from_str(&yaml)
+                .expect("Provider YAML without auth_method must deserialize successfully");
+
+            // auth_method must be None (backward compatible default)
+            prop_assert_eq!(
+                provider.auth_method, None,
+                "Provider without auth_method field must deserialize with auth_method == None"
+            );
+
+            // Sanity: other fields parsed correctly
+            prop_assert_eq!(&provider.name, &name);
+            prop_assert_eq!(&provider.provider_type, provider_type);
+            prop_assert_eq!(provider.timeout_seconds, timeout);
+            prop_assert_eq!(provider.max_connections, max_connections);
+        }
+    }
+
+    // Feature: codex-backend-translation, Property 6: Config Backward Compatibility
+    // For all YAML provider configs lacking the three new Codex fields,
+    // deserialization succeeds and each new Option<String> field equals None.
+    // **Validates: Requirements 10.6, 10.9**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
+
+        #[test]
+        fn prop_config_backward_compat(
+            name in "[a-z]{3,10}",
+            provider_type in prop_oneof![
+                Just("openai".to_string()),
+                Just("anthropic".to_string()),
+                Just("bedrock".to_string()),
+                Just("ollama".to_string()),
+            ],
+            auth_method in prop_oneof![
+                Just(None::<String>),
+                Just(Some("api_key".to_string())),
+                Just(Some("oauth".to_string())),
+            ],
+        ) {
+            // Build a YAML string WITHOUT the three new Codex fields
+            let auth_line = match &auth_method {
+                Some(m) => format!("auth_method: {m}\n"),
+                None => String::new(),
+            };
+            let yaml = format!(
+                "name: {name}\ntype: {provider_type}\n{auth_line}timeout_seconds: 30\nmax_connections: 100\n"
+            );
+
+            let provider: Provider = serde_yaml::from_str(&yaml).unwrap();
+            prop_assert_eq!(provider.codex_base_url_override, None);
+            prop_assert_eq!(provider.codex_model_override, None);
+            prop_assert_eq!(provider.instructions_override, None);
         }
     }
 }

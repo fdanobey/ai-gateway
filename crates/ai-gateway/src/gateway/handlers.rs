@@ -31,6 +31,8 @@ struct RequestLogContext {
     requested_model: String,
     responded_model: Option<String>,
     cost: f64,
+    /// Detailed error message for failed requests (shown in dashboard log viewer).
+    error_message: Option<String>,
 }
 
 impl RequestLogContext {
@@ -43,6 +45,7 @@ impl RequestLogContext {
             requested_model: request.model.clone(),
             responded_model: response.extra.get("gateway_responded_model").and_then(|v| v.as_str()).map(|s| s.to_string()).or_else(|| if response.model.is_empty() { None } else { Some(response.model.clone()) }),
             cost: response.extra.get("gateway_cost").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            error_message: None,
         }
     }
 
@@ -52,6 +55,16 @@ impl RequestLogContext {
             GatewayError::AllProvidersFailed(agg) => agg.attempts.first().map(|attempt| attempt.provider.clone()).unwrap_or_default(),
             _ => String::new(),
         };
+        let error_message = match error {
+            GatewayError::Provider { message, .. } => Some(message.clone()),
+            GatewayError::AllProvidersFailed(agg) => {
+                Some(agg.attempts.iter()
+                    .map(|a| format!("[{}] {}", a.provider, a.error))
+                    .collect::<Vec<_>>()
+                    .join("; "))
+            }
+            other => Some(other.to_string()),
+        };
         Self {
             trace_id,
             status_code: error.status_code().as_u16(),
@@ -60,6 +73,7 @@ impl RequestLogContext {
             requested_model: request.model.clone(),
             responded_model: None,
             cost: 0.0,
+            error_message,
         }
     }
 }
@@ -77,7 +91,7 @@ fn log_request(state: &super::AppState, request: &OpenAIRequest, context: &Reque
         duration_ms: context.duration_ms,
         cost: context.cost,
         request_body: None,
-        response_body: None,
+        response_body: context.error_message.clone(),
         requested_model: Some(request.model.clone()),
         responded_model: context.responded_model.clone(),
     };
@@ -196,16 +210,32 @@ async fn chat_completions_non_stream(state: AppState, request: OpenAIRequest, tr
     let start = std::time::Instant::now();
     tracing::debug!(model = %request.model, "Routing non-stream request");
 
-    // Check semantic cache before routing to providers
-    // Skip cache for requests with tools/tool_choice — these are stateful
-    let skip_cache = request.extra.contains_key("tools") || request.extra.contains_key("tool_choice");
-    if !skip_cache {
+    // Tier-1: exact-match in-memory cache.  Lookup is always safe — eligibility
+    // (deterministic temperature, n=1) is enforced internally.  Tool-using
+    // requests ARE looked up here; only writes are gated below by
+    // `should_cache_response`.
+    if let Some(cached_json) = state.exact_cache.get(&request) {
+        if let Ok(resp) = serde_json::from_str::<crate::models::openai::OpenAIResponse>(&cached_json) {
+            state.metrics.record_cache_hit();
+            state.metrics.complete_request(start.elapsed().as_millis() as u64);
+            let mut http = Json(resp).into_response();
+            attach_trace_id_header(&mut http, &trace_id);
+            return http;
+        }
+    } else if state.exact_cache.is_eligible(&request) {
+        state.metrics.record_cache_miss();
+    }
+
+    // Tier-2: semantic cache (paraphrase match).  Skipped for tool-using
+    // requests — semantic similarity across different tool surfaces is too
+    // risky for code agents.
+    let skip_semantic = request.extra.contains_key("tools") || request.extra.contains_key("tool_choice");
+    if !skip_semantic {
         if let Some(ref cache) = state.cache {
             match cache.get(&request).await {
                 Ok(Some(cached_response)) => {
                     state.metrics.record_cache_hit();
                     state.metrics.complete_request(start.elapsed().as_millis() as u64);
-                    // Parse the cached JSON response
                     match serde_json::from_str::<crate::models::openai::OpenAIResponse>(&cached_response) {
                         Ok(resp) => {
                             let mut response = Json(resp).into_response();
@@ -230,12 +260,19 @@ async fn chat_completions_non_stream(state: AppState, request: OpenAIRequest, tr
 
     match state.router.route_request(&request).await {
         Ok(response) => {
-            // Only cache responses that are safe to replay (no tool_calls, complete, etc.)
-            if let Some(ref cache) = state.cache {
-                if crate::router::router::Router::should_cache_response(&response) {
-                    let response_json = serde_json::to_string(&response).unwrap_or_default();
-                    if let Err(e) = cache.set(&request, &response_json, 0.0).await {
-                        tracing::warn!("Failed to cache response: {}", e);
+            // Cache responses that are safe to replay.  Filter applies to
+            // both tiers (no tool_calls, complete finish_reason, etc.).
+            let cacheable = crate::router::router::Router::should_cache_response(&response);
+            if cacheable {
+                let response_json = serde_json::to_string(&response).unwrap_or_default();
+                if !response_json.is_empty() {
+                    state.exact_cache.set(&request, response_json.clone());
+                }
+                if !skip_semantic {
+                    if let Some(ref cache) = state.cache {
+                        if let Err(e) = cache.set(&request, &response_json, 0.0).await {
+                            tracing::warn!("Failed to cache response: {}", e);
+                        }
                     }
                 }
             }
@@ -268,6 +305,30 @@ async fn chat_completions_stream(state: AppState, request: OpenAIRequest, trace_
         "Client requested streaming response; gateway currently buffers the full upstream response before synthesizing SSE"
     );
 
+    // Tier-1 cache lookup for streaming requests.  The cached payload is a
+    // full non-streaming `OpenAIResponse` JSON; we re-emit it as SSE chunks
+    // using the same path as a fresh provider response.  This means a single
+    // cached entry serves both stream and non-stream callers identically.
+    if let Some(cached_json) = state.exact_cache.get(&request) {
+        if let Ok(cached_resp) = serde_json::from_str::<OpenAIResponse>(&cached_json) {
+            state.metrics.record_cache_hit();
+            state.metrics.complete_request(start.elapsed().as_millis() as u64);
+            let stream_trace_id = trace_id.clone();
+            let stream = async_stream::stream! {
+                tracing::debug!(trace_id = %stream_trace_id, "Streaming cached response from exact cache");
+                for chunk in streaming_chunks_from_response(&cached_resp) {
+                    yield Ok::<_, Infallible>(Event::default().data(chunk.to_string()));
+                }
+                yield Ok(Event::default().data("[DONE]"));
+            };
+            let mut sse = Sse::new(stream).keep_alive(KeepAlive::default()).into_response();
+            attach_trace_id_header(&mut sse, &trace_id);
+            return sse;
+        }
+    } else if state.exact_cache.is_eligible(&request) {
+        state.metrics.record_cache_miss();
+    }
+
     // Route the request first (provider always returns non-streaming JSON).
     // Errors here happen BEFORE any SSE chunks are sent, so we return a
     // normal JSON error response with the proper HTTP status code.
@@ -283,6 +344,16 @@ async fn chat_completions_stream(state: AppState, request: OpenAIRequest, trace_
             return response;
         }
     };
+
+    // Buffer-and-replay: store the assembled response in the exact cache so
+    // a subsequent identical request (streaming or not) replays without
+    // hitting the provider.  Gated by `should_cache_response` (no tool_calls,
+    // finish_reason == stop, etc.).
+    if crate::router::router::Router::should_cache_response(&response) {
+        if let Ok(json) = serde_json::to_string(&response) {
+            state.exact_cache.set(&request, json);
+        }
+    }
 
     // Log the successful routed request before streaming begins
     let duration_ms = start.elapsed().as_millis() as u64;

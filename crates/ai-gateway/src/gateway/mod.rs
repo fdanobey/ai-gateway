@@ -15,11 +15,12 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::admin;
-use crate::cache::SemanticCache;
+use crate::cache::{ExactCache, SemanticCache};
 use crate::config::Config;
 use crate::error::GatewayError;
 use crate::logger::RequestLogger;
 use crate::metrics::Metrics;
+use crate::oauth::{OAuthManager, OAuthTokenStore};
 use crate::router::router::Router as RequestRouter;
 
 /// Shared application state accessible by all route handlers.
@@ -30,8 +31,13 @@ pub struct AppState {
     pub router: Arc<RequestRouter>,
     pub logger: Arc<RequestLogger>,
     pub cache: Option<Arc<SemanticCache>>,
+    /// Tier-1 in-memory exact-match response cache (always present;
+    /// disabled internally when `config.exact_cache.enabled = false`).
+    pub exact_cache: Arc<ExactCache>,
     pub metrics: Arc<Metrics>,
     pub shutting_down: Arc<AtomicBool>,
+    pub oauth_manager: Option<Arc<OAuthManager>>,
+    pub codex_models_discovery: Arc<crate::codex::models_discovery::ModelsDiscovery>,
 }
 
 /// Core HTTP server wrapping Axum with middleware and integrated components.
@@ -47,7 +53,7 @@ impl GatewayServer {
 
         let config_arc = Arc::new(RwLock::new(config.clone()));
         let metrics = Arc::new(Metrics::new());
-        let router = RequestRouter::new(config_arc.clone(), metrics.clone());
+        let mut router = RequestRouter::new(config_arc.clone(), metrics.clone());
 
         let cache = match &config.semantic_cache {
             Some(sc) if sc.enabled => {
@@ -75,14 +81,69 @@ impl GatewayServer {
             _ => None,
         };
 
+        // --- OAuth manager construction (Req 4.3, 5.1) ---
+        let oauth_manager = match crate::secrets::master_key_path() {
+            Ok(key_path) => {
+                let storage_dir = key_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                let token_path = OAuthTokenStore::default_path(storage_dir);
+                let store = OAuthTokenStore::new(token_path);
+                let http_client = reqwest::Client::new();
+                let manager = Arc::new(OAuthManager::new(store, http_client));
+
+                // Load any previously persisted session from disk (Req 4.3).
+                if let Err(e) = manager.load_existing_session().await {
+                    tracing::warn!(error = %e, "Failed to load existing OAuth session; starting unauthenticated");
+                }
+
+                // Spawn background refresh task (Req 5.1).
+                manager.clone().start_refresh_loop();
+
+                // Wire into the request router so OAuth providers can resolve tokens.
+                router.set_oauth_manager(manager.clone());
+
+                Some(manager)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Could not determine OAuth storage path; OAuth disabled");
+                None
+            }
+        };
+
+
+        // --- Codex InstructionsStore construction (Req 7.1, 7.2, 7.8) ---
+        // Only constructed when at least one Codex-capable provider exists.
+        let has_codex_provider = config.providers.iter().any(|p| {
+            p.auth_method.as_deref() == Some("oauth") && p.provider_type == "openai"
+        });
+        if has_codex_provider {
+            match crate::codex::InstructionsStore::new(&config).await {
+                Ok(store) => {
+                    let store = Arc::new(store);
+                    router.set_instructions_store(store.clone());
+                    // Spawn a background refresh (non-blocking) so the first
+                    // fetch doesn't delay /healthz readiness (Req 7.8).
+                    let refresh_store = store.clone();
+                    tokio::spawn(async move {
+                        refresh_store.maybe_refresh().await;
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to initialize Codex InstructionsStore; Codex providers will use bundled fallback");
+                }
+            }
+        }
+
         let state = AppState {
             config: config_arc,
             config_path: Arc::new(config_path.unwrap_or_else(|| std::path::PathBuf::from("./config.yaml"))),
             router: Arc::new(router),
             logger: Arc::new(logger),
             cache,
+            exact_cache: Arc::new(ExactCache::new(&config.exact_cache)),
             metrics,
             shutting_down: Arc::new(AtomicBool::new(false)),
+            oauth_manager,
+            codex_models_discovery: Arc::new(crate::codex::models_discovery::ModelsDiscovery::new()),
         };
 
         Ok(Self { state })
@@ -495,6 +556,7 @@ mod tests {
                 api_key_encrypted: None,
                 api_secret_env: None,
                 api_secret_encrypted: None,
+                auth_method: None,
                 resolved_api_key: None,
                 resolved_api_secret: None,
                 region: None,
@@ -512,6 +574,9 @@ mod tests {
                 custom_vpc_endpoint: false,
                 prompt_caching: false,
                 reasoning: true,
+                codex_base_url_override: None,
+                codex_model_override: None,
+                instructions_override: None,
             }],
             model_groups: vec![ModelGroup {
                 name: "test-group".to_string(),
@@ -528,10 +593,12 @@ mod tests {
             retry: RetryConfig::default(),
             logging: LoggingConfig::default(),
             semantic_cache: None,
+            exact_cache: ExactCacheConfig::default(),
             prometheus: None,
             context: crate::config::ContextConfig::default(),
             first_launch_completed: false,
             tray: TrayConfig::default(),
+            codex_instructions_url: None,
         }
     }
 
@@ -690,6 +757,7 @@ mod tests {
                         api_key_encrypted: None,
                         api_secret_env: None,
                         api_secret_encrypted: None,
+                        auth_method: None,
                         resolved_api_key: None,
                         resolved_api_secret: None,
                         region: None,
@@ -707,6 +775,9 @@ mod tests {
                         custom_vpc_endpoint: false,
                         prompt_caching: false,
                         reasoning: true,
+                        codex_base_url_override: None,
+                        codex_model_override: None,
+                        instructions_override: None,
                     }
                 }).collect();
 
@@ -772,10 +843,12 @@ mod tests {
                     retry: RetryConfig::default(),
                     logging: LoggingConfig::default(),
                     semantic_cache: None,
+                    exact_cache: ExactCacheConfig::default(),
                     prometheus: None,
                     context: ContextConfig::default(),
                     first_launch_completed: false,
                     tray: TrayConfig::default(),
+                    codex_instructions_url: None,
                 };
 
                 let server = GatewayServer::new(cfg, None).await.unwrap();
@@ -1301,6 +1374,7 @@ mod tests {
                         api_key_encrypted: None,
                         api_secret_env: None,
                         api_secret_encrypted: None,
+                        auth_method: None,
                         resolved_api_key: None,
                         resolved_api_secret: None,
                         region: None,
@@ -1318,6 +1392,9 @@ mod tests {
                         custom_vpc_endpoint: false,
                         prompt_caching: false,
                         reasoning: true,
+                        codex_base_url_override: None,
+                        codex_model_override: None,
+                        instructions_override: None,
                     }],
                     model_groups: vec![ModelGroup {
                         name: format!("group-{}", provider_suffix),
@@ -1334,10 +1411,12 @@ mod tests {
                     retry: RetryConfig::default(),
                     logging: LoggingConfig::default(),
                     semantic_cache: None,
+                    exact_cache: ExactCacheConfig::default(),
                     prometheus: None,
                     context: ContextConfig::default(),
                     first_launch_completed: false,
                     tray: TrayConfig::default(),
+                    codex_instructions_url: None,
                 };
 
                 // Write new config to disk

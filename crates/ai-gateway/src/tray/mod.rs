@@ -198,7 +198,7 @@ mod tests {
     use super::*;
     use crate::config::{
         AdminConfig, CircuitBreakerConfig, ContextConfig, CorsConfig, DashboardConfig,
-        LoggingConfig, ModelGroup, Provider, ProviderConnectionPoolConfig, ProviderModel,
+        ExactCacheConfig, LoggingConfig, ModelGroup, Provider, ProviderConnectionPoolConfig, ProviderModel,
         RetryConfig, ServerConfig, TrayConfig,
     };
 
@@ -222,6 +222,7 @@ mod tests {
                 api_key_encrypted: None,
                 api_secret_env: None,
                 api_secret_encrypted: None,
+                auth_method: None,
                 resolved_api_key: None,
                 resolved_api_secret: None,
                 region: None,
@@ -239,6 +240,9 @@ mod tests {
                 custom_vpc_endpoint: false,
                 prompt_caching: false,
                 reasoning: true,
+                codex_base_url_override: None,
+                codex_model_override: None,
+                instructions_override: None,
             }],
             model_groups: vec![ModelGroup {
                 name: "default".to_string(),
@@ -255,10 +259,12 @@ mod tests {
             retry: RetryConfig::default(),
             logging: LoggingConfig::default(),
             semantic_cache: None,
+            exact_cache: ExactCacheConfig::default(),
             prometheus: None,
             context: ContextConfig::default(),
             first_launch_completed: false,
             tray: TrayConfig::default(),
+            codex_instructions_url: None,
         }
     }
 

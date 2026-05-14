@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod cache;
+pub mod codex;
 pub mod config;
 pub mod context;
 pub mod dashboard;
@@ -8,6 +9,7 @@ pub mod gateway;
 pub mod logger;
 pub mod metrics;
 pub mod models;
+pub mod oauth;
 pub mod providers;
 pub mod router;
 pub mod secrets;

@@ -198,7 +198,7 @@ fn mime_from_path(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AdminConfig, CircuitBreakerConfig, Config, ContextConfig, CorsConfig, DashboardConfig, LoggingConfig, ModelGroup, Provider, ProviderModel, RetryConfig, ServerConfig, TrayConfig};
+    use crate::config::{AdminConfig, CircuitBreakerConfig, Config, ContextConfig, CorsConfig, DashboardConfig, ExactCacheConfig, LoggingConfig, ModelGroup, Provider, ProviderModel, RetryConfig, ServerConfig, TrayConfig};
     use crate::logger::LogEntry;
     use crate::gateway::GatewayServer;
     use chrono::{Datelike, Timelike};
@@ -226,6 +226,7 @@ mod tests {
                 api_key_encrypted: None,
                 api_secret_env: None,
                 api_secret_encrypted: None,
+                auth_method: None,
                 resolved_api_key: None,
                 resolved_api_secret: None,
                 region: None,
@@ -243,6 +244,9 @@ mod tests {
                 custom_vpc_endpoint: false,
                 prompt_caching: false,
                 reasoning: true,
+                codex_base_url_override: None,
+                codex_model_override: None,
+                instructions_override: None,
             }],
             model_groups: vec![ModelGroup {
                 name: "default".to_string(),
@@ -259,10 +263,12 @@ mod tests {
             retry: RetryConfig::default(),
             logging: LoggingConfig::default(),
             semantic_cache: None,
+            exact_cache: ExactCacheConfig::default(),
             prometheus: None,
             context: ContextConfig::default(),
             first_launch_completed: false,
             tray: TrayConfig::default(),
+            codex_instructions_url: None,
         }
     }
 

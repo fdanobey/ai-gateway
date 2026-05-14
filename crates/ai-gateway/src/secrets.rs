@@ -170,7 +170,18 @@ pub fn master_key_path() -> Result<PathBuf, SecretError> {
     Ok(storage_dir()?.join(MASTER_KEY_FILE))
 }
 
-fn storage_dir() -> Result<PathBuf, SecretError> {
+/// Crate-visible shim for resolving the secrets directory path so other
+/// modules (e.g. the Codex `InstructionsStore`) can colocate their on-disk
+/// caches alongside the master key and OAuth token blob without exposing
+/// the private `storage_dir()` helper.
+pub(crate) fn storage_dir_path() -> Result<PathBuf, SecretError> {
+    storage_dir()
+}
+
+/// Resolve the per-user secrets directory (colocated with the master key and
+/// OAuth token store). Crate-visible so the Codex `InstructionsStore` can
+/// colocate its disk cache with the OAuth blob (design §5).
+pub(crate) fn storage_dir() -> Result<PathBuf, SecretError> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {
@@ -204,8 +215,12 @@ fn read_master_key(path: &PathBuf) -> Result<[u8; KEY_SIZE], SecretError> {
     Ok(key)
 }
 
+/// Restrict `path` to owner-only read/write (`0600`) on Unix; no-op elsewhere.
+///
+/// Shared across `secrets` (master key) and `oauth::store` (encrypted token
+/// blob) so both at-rest artifacts land with the same hardened permissions.
 #[cfg(unix)]
-fn set_owner_only_permissions(path: &PathBuf) -> std::io::Result<()> {
+pub(crate) fn set_owner_only_permissions(path: &PathBuf) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let permissions = PermissionsExt::from_mode(0o600);
@@ -213,7 +228,7 @@ fn set_owner_only_permissions(path: &PathBuf) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn set_owner_only_permissions(_path: &PathBuf) -> std::io::Result<()> {
+pub(crate) fn set_owner_only_permissions(_path: &PathBuf) -> std::io::Result<()> {
     Ok(())
 }
 

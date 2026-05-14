@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ai_gateway::config::{AdminConfig, Config, ContextConfig, CorsConfig, DashboardConfig, LoggingConfig, ModelGroup, Provider, ProviderConnectionPoolConfig, ProviderModel, RetryConfig, ServerConfig, TrayConfig};
+use ai_gateway::config::{AdminConfig, Config, ContextConfig, CorsConfig, DashboardConfig, ExactCacheConfig, LoggingConfig, ModelGroup, Provider, ProviderConnectionPoolConfig, ProviderModel, RetryConfig, ServerConfig, TrayConfig};
 use ai_gateway::tray::{SingleInstanceGuard, SplashScreen, TrayAssets, TrayManager, TrayMenuAction};
 
 fn test_config() -> Config {
@@ -25,6 +25,7 @@ fn test_config() -> Config {
             api_key_encrypted: None,
             api_secret_env: None,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: None,
             resolved_api_secret: None,
             region: None,
@@ -42,6 +43,9 @@ fn test_config() -> Config {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         }],
         model_groups: vec![ModelGroup {
             name: "default".to_string(),
@@ -58,10 +62,12 @@ fn test_config() -> Config {
         retry: RetryConfig::default(),
         logging: LoggingConfig::default(),
         semantic_cache: None,
+        exact_cache: ExactCacheConfig::default(),
         prometheus: None,
         context: ContextConfig::default(),
         first_launch_completed: false,
         tray: TrayConfig::default(),
+        codex_instructions_url: None,
     }
 }
 

@@ -39,6 +39,7 @@ fn test_config() -> Config {
             api_key_encrypted: None,
             api_secret_env: None,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: None,
             resolved_api_secret: None,
             region: None,
@@ -56,6 +57,9 @@ fn test_config() -> Config {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         }],
         model_groups: vec![ModelGroup {
             name: "test-group".to_string(),
@@ -72,10 +76,12 @@ fn test_config() -> Config {
         retry: RetryConfig::default(),
         logging: LoggingConfig::default(),
         semantic_cache: None,
+        exact_cache: ExactCacheConfig::default(),
         prometheus: None,
         context: ai_gateway::config::ContextConfig::default(),
         first_launch_completed: false,
         tray: ai_gateway::config::TrayConfig::default(),
+        codex_instructions_url: None,
     }
 }
 

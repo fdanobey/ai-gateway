@@ -1,0 +1,35 @@
+OBEY API Router
+================
+
+This product includes software vendored from third-party projects.
+The following notices apply to those components.
+
+---------------------------------------------------------------------
+Vendored: Codex GPT-5.1 system prompt
+---------------------------------------------------------------------
+
+Local path:    crates/ai-gateway/src/codex/gpt_5_1_prompt.md
+Upstream repo: https://github.com/openai/codex
+Upstream path: codex-rs/core/gpt_5_1_prompt.md
+Commit SHA:    c9edb26755427bd01f82fd7b4e8677f32ad221a4
+License:       Apache License, Version 2.0
+License URL:   https://github.com/openai/codex/blob/c9edb26755427bd01f82fd7b4e8677f32ad221a4/LICENSE
+
+Copyright (c) OpenAI and the Codex contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may
+not use this file except in compliance with the License. You may obtain
+a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+The file is vendored verbatim from the upstream commit named above and
+is compiled into the `ai-gateway` crate via `include_str!` for use as
+the Codex system `instructions` payload. No modifications have been
+made to the upstream content.

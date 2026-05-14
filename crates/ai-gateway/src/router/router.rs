@@ -24,6 +24,15 @@ pub struct Router {
     context_manager: Arc<ContextManager>,
     /// Shared metrics for recording provider-level stats
     metrics: Arc<crate::metrics::Metrics>,
+    /// OAuth session manager used when a provider is configured with
+    /// `auth_method: oauth`. `None` while OAuth is not wired up (pre-task
+    /// 14.1) — in that state OAuth bearer resolution is silently skipped and
+    /// providers fall back to their configured api_key. Req 6.2
+    /// (`openai-oauth-login` spec).
+    oauth_manager: Option<Arc<crate::oauth::OAuthManager>>,
+    /// Codex system instructions store. Populated at startup when at least one
+    /// Codex-capable provider (oauth+openai) is configured.
+    instructions_store: Option<Arc<crate::codex::InstructionsStore>>,
 }
 
 impl Router {
@@ -41,6 +50,8 @@ impl Router {
             http_clients: Arc::new(DashMap::new()),
             context_manager: Arc::new(ContextManager::with_config(context_config)),
             metrics,
+            oauth_manager: None,
+            instructions_store: None,
         }
     }
 
@@ -54,12 +65,32 @@ impl Router {
             http_clients: Arc::new(DashMap::new()),
             context_manager: Arc::new(ContextManager::with_config(context_config)),
             metrics,
+            oauth_manager: None,
+            instructions_store: None,
         }
+    }
+
+    /// Attach an [`OAuthManager`](crate::oauth::OAuthManager) so providers
+    /// configured with `auth_method: oauth` can resolve a Bearer access token
+    /// per request. Called once during gateway startup (task 14.1).
+    pub fn set_oauth_manager(&mut self, manager: Arc<crate::oauth::OAuthManager>) {
+        self.oauth_manager = Some(manager);
+    }
+
+    /// Attach an [`InstructionsStore`](crate::codex::InstructionsStore) for
+    /// Codex providers. Called once during gateway startup.
+    pub fn set_instructions_store(&mut self, store: Arc<crate::codex::InstructionsStore>) {
+        self.instructions_store = Some(store);
     }
 
     /// Get the context manager
     pub fn context_manager(&self) -> Arc<ContextManager> {
         self.context_manager.clone()
+    }
+
+    /// Get the instructions store (used by admin test-connection endpoint).
+    pub fn instructions_store(&self) -> Option<Arc<crate::codex::InstructionsStore>> {
+        self.instructions_store.clone()
     }
 
     /// Find the model group containing the requested model
@@ -363,8 +394,91 @@ impl Router {
                 format!("Provider '{}' not found in config", provider_name)
             ))?;
         
+        // ─── Codex dispatch (Req 10.1, 10.2) ────────────────────────────────
+        let is_codex = provider_cfg.auth_method.as_deref() == Some("oauth")
+            && provider_cfg.provider_type == "openai";
+
+        if is_codex {
+            // Delegate end-to-end to CodexProviderClient.
+            let oauth = match &self.oauth_manager {
+                Some(m) => m.clone(),
+                None => {
+                    return Err(GatewayError::Provider {
+                        provider: provider_name.to_string(),
+                        message: "OAuth manager not attached for Codex provider".to_string(),
+                        status_code: Some(500),
+                    });
+                }
+            };
+            let instructions = match &self.instructions_store {
+                Some(s) => s.clone(),
+                None => {
+                    return Err(GatewayError::Provider {
+                        provider: provider_name.to_string(),
+                        message: "Instructions store not attached for Codex provider".to_string(),
+                        status_code: Some(500),
+                    });
+                }
+            };
+            let http = self.get_or_create_http_client(provider_name, &provider_cfg.connection_pool)?;
+
+            let codex_client = crate::codex::client::CodexProviderClient::new(
+                provider_name.to_string(),
+                oauth,
+                instructions,
+                http,
+                self.metrics.clone(),
+                provider_cfg.codex_base_url_override.clone(),
+                provider_cfg.codex_model_override.clone(),
+                provider_cfg.instructions_override.clone(),
+                vec![], // xhigh_models_allowlist — TODO: wire from gateway config
+                vec![], // reasoning_models_allowlist — TODO: wire from gateway config
+            );
+
+            use crate::providers::ProviderClient;
+            let mut codex_request = request.clone();
+            // Rewrite the model from the group name to the actual provider model ID
+            codex_request.model = provider_model.model.clone();
+            let result = codex_client.chat_completion(codex_request).await?;
+            return Ok(result.response);
+        }
+        // ─── End Codex dispatch ──────────────────────────────────────────────
+
         // Resolve API key: try as env var first, fall back to using the value directly
         let api_key = provider_cfg.resolve_api_key().unwrap_or_default();
+
+        // OAuth bearer override (Req 6.2): when the provider declares
+        // `auth_method: oauth` and the OAuth manager has a live,
+        // non-expired access token, use it as the outgoing Bearer in place
+        // of any configured api_key.
+        let mut oauth_bearer: Option<String> =
+            if provider_cfg.auth_method.as_deref() == Some("oauth") {
+                match &self.oauth_manager {
+                    Some(manager) => manager.get_access_token().await,
+                    None => None,
+                }
+            } else {
+                None
+            };
+
+        // Req 6.3 (openai-oauth-login): if the provider is configured for
+        // OAuth but the session snapshot is Unauthenticated / Expired /
+        // Refreshing (or the manager is unattached), skip this provider so
+        // the outer fail-over loop moves on to the next candidate. Falling
+        // back to the configured `api_key` would route traffic onto the
+        // wrong credentials and mask a genuinely unauthenticated session.
+        if provider_cfg.auth_method.as_deref() == Some("oauth") && oauth_bearer.is_none() {
+            debug!(
+                provider = provider_name,
+                model = %provider_model.model,
+                "OAuth session unusable (unauthenticated/expired/refreshing), skipping provider"
+            );
+            return Err(GatewayError::Provider {
+                provider: provider_name.to_string(),
+                message: "OAuth session not authenticated; no usable access token".to_string(),
+                status_code: Some(401),
+            });
+        }
         
         // Build base URL — strip trailing slash, append /v1 if not present
         // For Bedrock with API key, use the Bedrock Mantle endpoint (unless custom VPC endpoint)
@@ -394,6 +508,7 @@ impl Router {
         let prompt_caching = provider_cfg.prompt_caching;
         let reasoning = provider_cfg.reasoning;
         let provider_region = provider_cfg.region.clone();
+        let is_oauth_provider = provider_cfg.auth_method.as_deref() == Some("oauth");
         let jitter_enabled = config.retry.jitter_enabled;
         let jitter_ratio = config.retry.jitter_ratio;
         
@@ -553,7 +668,9 @@ If no tool is needed, respond normally with plain assistant text and no `tool_ca
             let mut req_builder = http_client.post(&url)
                 .header("Content-Type", "application/json");
             
-            if !api_key.is_empty() {
+            if let Some(ref bearer) = oauth_bearer {
+                req_builder = req_builder.header("Authorization", format!("Bearer {}", bearer));
+            } else if !api_key.is_empty() {
                 req_builder = req_builder.header("Authorization", format!("Bearer {}", api_key));
             }
             
@@ -742,6 +859,40 @@ If no tool is needed, respond normally with plain assistant text and no `tool_ca
                         status_code: Some(status_code),
                     };
                     
+                    // Req 6.4 (openai-oauth-login): when an OAuth provider
+                    // returns HTTP 401, force an immediate token refresh
+                    // *before* the circuit breaker's retry path consumes the
+                    // attempt. If the refresh succeeds, update the bearer and
+                    // let the retry loop continue with the fresh token.
+                    if status_code == 401 && is_oauth_provider {
+                        if let Some(ref manager) = self.oauth_manager {
+                            debug!(
+                                provider = provider_name,
+                                attempt,
+                                "OAuth provider returned 401, forcing token refresh before retry"
+                            );
+                            match manager.force_refresh().await {
+                                Ok(new_token) => {
+                                    oauth_bearer = Some(new_token);
+                                    debug!(
+                                        provider = provider_name,
+                                        "OAuth token refreshed successfully, retrying request"
+                                    );
+                                    last_error = Some(err);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        provider = provider_name,
+                                        error = %e,
+                                        "OAuth force-refresh failed after upstream 401, failing over"
+                                    );
+                                    return Err(err);
+                                }
+                            }
+                        }
+                    }
+
                     // Don't retry 4xx errors except 408 (timeout)
                     // 429 (rate limit) should fail over to next provider, not retry same one
                     // 503 (service unavailable) signals provider is down — fail over immediately
@@ -2608,7 +2759,7 @@ If no tool is needed, respond normally with plain assistant text and no `tool_ca
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CircuitBreakerConfig, ModelGroup, ProviderModel};
+    use crate::config::{CircuitBreakerConfig, ExactCacheConfig, ModelGroup, ProviderModel};
 
     pub(super) fn test_metrics() -> Arc<crate::metrics::Metrics> {
         Arc::new(crate::metrics::Metrics::new())
@@ -2632,10 +2783,12 @@ mod tests {
             retry: crate::config::RetryConfig::default(),
             logging: crate::config::LoggingConfig::default(),
             semantic_cache: None,
+            exact_cache: ExactCacheConfig::default(),
             prometheus: None,
             context: crate::config::ContextConfig::default(),
             first_launch_completed: false,
             tray: crate::config::TrayConfig::default(),
+            codex_instructions_url: None,
         }
     }
 
@@ -2878,6 +3031,7 @@ mod tests {
             api_key_encrypted: None,
             api_secret_env: None,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: None,
             resolved_api_secret: None,
             region: None,
@@ -2898,6 +3052,9 @@ mod tests {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         }];
         let router_metrics = test_metrics();
         router_metrics.add_cost("budgeted-provider", 1.25);

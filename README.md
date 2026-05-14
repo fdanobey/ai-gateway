@@ -38,7 +38,9 @@ OBEY API Gateway sits between your application and your AI providers. Point your
 - **Automatic failover** — circuit breakers + retry with exponential backoff across providers
 - **Priority & cost-aware routing** — configure model groups with priority, cost, and latency-based selection
 - **Context window management** — automatic truncation when requests exceed model limits
-- **Semantic caching** — optional Qdrant-based response caching to reduce cost and latency
+- **Response caching** — built-in two-tier cache: in-memory exact-match (default-on, no setup) plus optional semantic Qdrant tier; works for both streaming and non-streaming requests, including tool-using clients
+- **OpenAI OAuth login** — browser-based sign-in with your ChatGPT Plus/Pro subscription (PKCE flow, automatic token refresh)
+- **Codex backend translation** — transparently routes OAuth-authenticated requests through the ChatGPT Codex backend, translating Chat Completions ↔ Responses API on the fly
 - **Encrypted API key storage** — provider keys encrypted at rest with a machine-local master key
 - **Admin panel & dashboard** — embedded web UIs for configuration, metrics, and log viewing
 - **Prometheus metrics** — `/metrics` endpoint for existing monitoring infrastructure
@@ -164,13 +166,49 @@ model_groups:
 
 ### API Key Management
 
-Provider keys can be configured three ways:
+Provider keys can be configured four ways:
 
 1. **Environment variable reference** — set `api_key_env: "OPENAI_API_KEY"` and export the env var
 2. **Admin UI** — enter keys through the web interface; they're encrypted automatically
 3. **Encrypted in config** — stored as `api_key_encrypted: "enc-v1:<nonce>:<ciphertext>"`
+4. **OAuth login** — for OpenAI providers, authenticate via browser sign-in (see below)
 
 The master encryption key is stored outside the config file in your platform's secure directory (e.g. `%APPDATA%\ai-gateway\master.key` on Windows).
+
+### OpenAI OAuth Login
+
+Instead of manually creating and managing OpenAI API keys, you can authenticate with your ChatGPT Plus/Pro subscription via browser-based OAuth:
+
+```yaml
+providers:
+  - name: "openai-oauth"
+    type: "openai"
+    base_url: "https://api.openai.com/v1"
+    auth_method: "oauth"              # Use OAuth instead of api_key_env
+```
+
+Trigger the login flow via the admin API:
+
+```bash
+# Initiate browser-based login
+curl -X POST http://localhost:8080/admin/oauth/openai/login
+
+# Check session status
+curl http://localhost:8080/admin/oauth/openai/status
+
+# Logout (clear stored tokens)
+curl -X POST http://localhost:8080/admin/oauth/openai/logout
+```
+
+The gateway handles the full token lifecycle automatically:
+- Opens your default browser to OpenAI's authorization page
+- Receives the callback on a local loopback server
+- Exchanges the authorization code for tokens (PKCE + S256)
+- Encrypts and persists tokens to disk (survives restarts)
+- Refreshes the access token in the background before expiry
+- Falls back to the next provider if the OAuth session expires
+
+**Security:** Tokens are encrypted at rest with AES-256-GCM, the callback server binds exclusively to `127.0.0.1`, and token values are never logged at any level.
 
 ### Bedrock Authentication
 
@@ -198,6 +236,43 @@ Bedrock-specific options:
 | `prompt_caching` | `false` | Enable prompt caching (Claude 3.5+ models) |
 | `custom_vpc_endpoint` | `false` | Use `base_url` as-is instead of auto-generating the Mantle endpoint |
 | `reasoning` | `true` | Enable extended thinking for supported models |
+
+### Response Caching
+
+The gateway runs a two-tier response cache for chat completions. Both tiers cache the same key space, so a single entry serves streaming and non-streaming callers.
+
+| Tier | Backend | Default | Catches |
+|------|---------|---------|---------|
+| 1 — Exact | In-memory `DashMap`, SHA-256 keyed | **Enabled** | Byte-identical retries, agent loops, dedup |
+| 2 — Semantic | Qdrant + embedding provider | Disabled | Paraphrased / near-identical prompts |
+
+**Eligibility (both tiers):** `temperature ≤ temperature_threshold` (default `0.15`) **and** `n == 1`. Higher temperatures imply non-determinism and are skipped to avoid replaying randomized output.
+
+**Key fields:** `model`, full `messages`, `tools`, `tool_choice`, `response_format`, `top_p`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `n`, `max_tokens`. The `stream` flag and per-request transport metadata (`user`, request-id, trace-id) are intentionally excluded.
+
+**Write-side filter:** responses with `tool_calls`, `finish_reason: length`, or `finish_reason: content_filter` are never stored, regardless of eligibility.
+
+```yaml
+# Tier 1 — exact-match in-memory cache (defaults shown; section optional)
+exact_cache:
+  enabled: true
+  max_entries: 5000           # oldest-first eviction above this
+  ttl_seconds: 3600
+  temperature_threshold: 0.15
+
+# Tier 2 — semantic cache (optional, requires Qdrant)
+# semantic_cache:
+#   enabled: true
+#   qdrant_url: "http://localhost:6334"     # gRPC port, not 6333
+#   collection_name: "ai_gateway_cache"
+#   similarity_threshold: 0.95
+#   embedding_provider: "openai"            # must match a provider name above
+#   embedding_model: "text-embedding-3-small"
+#   ttl_seconds: 3600
+#   max_cache_size: 10000
+```
+
+The dashboard's **Cache Hit Rate** card stays at `N/A` until the first eligible request is observed, then switches to a percentage. To force traffic through the cache, send the same request twice with `temperature: 0` (or omit it).
 
 ### Timeout Configuration
 
@@ -239,6 +314,9 @@ All `/v1/*` endpoints are OpenAI-compatible. Requests include an `x-trace-id` re
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/admin/oauth/openai/login` | Initiate OpenAI OAuth login |
+| `GET` | `/admin/oauth/openai/status` | OAuth session status |
+| `POST` | `/admin/oauth/openai/logout` | Clear OAuth tokens |
 | `GET` | `/health` | Health check |
 | `GET` | `/metrics` | Prometheus metrics |
 | `POST` | `/v1/chat/completions` | Chat completions (streaming + non-streaming) |
@@ -331,11 +409,12 @@ When built with `--features tray` on Windows, the binary runs as a desktop appli
 │           ├── router/               # Provider selection, circuit breaker, rate limiter
 │           ├── providers/            # Provider implementations (8 providers)
 │           ├── context/              # Context window management & truncation
-│           ├── cache/                # Semantic caching (Qdrant)
+│           ├── cache/                # Response caching: in-memory exact-match (tier 1) + optional Qdrant semantic (tier 2)
 │           ├── admin/                # Admin panel routes & embedded UI
 │           ├── dashboard/            # Dashboard routes & WebSocket metrics
 │           ├── logger/               # SQLite request logging
 │           ├── metrics/              # Prometheus metrics
+│           ├── oauth/                # OpenAI OAuth 2.0 login (PKCE flow)
 │           ├── secrets.rs            # API key encryption/decryption
 │           ├── error/                # Error types & HTTP status mapping
 │           ├── models/               # OpenAI-compatible data models
@@ -431,4 +510,5 @@ This project is licensed under the [MIT License](LICENSE).
 | All providers circuit-broken | Sustained upstream failures | Use `/admin/config/reload` to reset breakers, or check provider status pages |
 | Context-length errors loop | Truncation disabled or max retries hit | Enable `context.enabled: true` and increase `max_truncation_retries` |
 | Dashboard shows no data | WebSocket blocked by proxy | Ensure your reverse proxy passes `Upgrade: websocket` headers |
+| Cache Hit Rate stuck on `N/A` | Zero eligible requests observed yet | `N/A` means the cache has never been consulted. Send two identical requests with `temperature ≤ 0.15` and `n: 1`. Tool-using requests are eligible too. |
 | Timeout on large prompts | `total_timeout_seconds` too low for model | Increase the provider's `total_timeout_seconds`. For thinking models (o1, o3, DeepSeek-R1), also check `ttfb_timeout_seconds` — these models need longer to start responding |

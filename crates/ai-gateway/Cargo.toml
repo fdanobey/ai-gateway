@@ -53,6 +53,7 @@ axum-server = { workspace = true }
 base64 = "0.22"
 rand = "0.8"
 ring = "0.17"
+open = "5"
 image = { version = "0.25.8", optional = true, default-features = false, features = ["jpeg", "png"] }
 
 [target.'cfg(windows)'.dependencies]

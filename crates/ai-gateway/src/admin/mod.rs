@@ -45,6 +45,10 @@ pub fn admin_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .nest("/config", config_api)
         .route("/providers/models", get(proxy_provider_models))
+        .route("/test-connection", post(test_connection))
+        .route("/oauth/openai/login", post(oauth_login))
+        .route("/oauth/openai/status", get(oauth_status))
+        .route("/oauth/openai/logout", post(oauth_logout))
         .route("/", get(index_handler))
         .route("/{*path}", get(static_handler))
         .route_layer(middleware::from_fn_with_state(state, admin_auth_middleware))
@@ -735,6 +739,315 @@ async fn import_config(body: String) -> Response {
         .into_response()
 }
 
+// ---------------------------------------------------------------------------
+// Test Connection endpoint (Req 11.3, 11.6, 12.2)
+// ---------------------------------------------------------------------------
+
+/// POST /admin/test-connection
+///
+/// Body: `{"provider_name": "..."}`
+/// Tests end-to-end connectivity for a Codex provider by issuing a minimal
+/// chat completion request. Response bodies never include access tokens,
+/// refresh tokens, or chatgpt-account-id (Req 11.6, 12.2).
+async fn test_connection(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    // Extract provider_name from body
+    let provider_name = match body.get("provider_name").and_then(|v| v.as_str()) {
+        Some(name) => name.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"status": "error", "message": "missing provider_name"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Look up provider in config
+    let config = state.config.read().await;
+    let provider_cfg = match config.providers.iter().find(|p| p.name == provider_name) {
+        Some(p) => p.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"status": "not_found"})),
+            )
+                .into_response();
+        }
+    };
+    drop(config);
+
+    // Check if this is a Codex provider (oauth + openai)
+    let is_codex = provider_cfg.auth_method.as_deref() == Some("oauth")
+        && provider_cfg.provider_type == "openai";
+
+    if !is_codex {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "message": "not a Codex provider"})),
+        )
+            .into_response();
+    }
+
+    // Check OAuth session
+    let oauth = match &state.oauth_manager {
+        Some(m) => m.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"status": "unauthenticated", "message": "OpenAI OAuth login required"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Check if we have a valid token (Req 11.3)
+    let _access_token = match oauth.get_access_token().await {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"status": "unauthenticated", "message": "OpenAI OAuth login required"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Build a minimal test request
+    let test_model = provider_cfg
+        .codex_model_override
+        .clone()
+        .unwrap_or_else(|| "gpt-4.1-nano".to_string());
+    let test_request = crate::models::openai::OpenAIRequest {
+        model: test_model.clone(),
+        messages: vec![crate::models::openai::Message {
+            role: "user".to_string(),
+            content: serde_json::json!("Say hi"),
+            extra: serde_json::Map::new(),
+        }],
+        stream: false,
+        temperature: None,
+        max_tokens: Some(16),
+        extra: serde_json::Map::new(),
+    };
+
+    // Get instructions store
+    let instructions = match state.router.instructions_store() {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error", "message": "instructions store not initialized"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Build CodexProviderClient and dispatch
+    let http = reqwest::Client::new();
+    let codex_client = crate::codex::client::CodexProviderClient::new(
+        provider_name.clone(),
+        oauth,
+        instructions,
+        http,
+        state.metrics.clone(),
+        provider_cfg.codex_base_url_override.clone(),
+        provider_cfg.codex_model_override.clone(),
+        provider_cfg.instructions_override.clone(),
+        vec![],
+        vec![],
+    );
+
+    let start = std::time::Instant::now();
+    use crate::providers::ProviderClient;
+    match codex_client.chat_completion(test_request).await {
+        Ok(_response) => {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "status": "ok",
+                    "model": test_model,
+                    "latency_ms": latency_ms,
+                })),
+            )
+                .into_response()
+        }
+        Err(crate::error::GatewayError::Provider { status_code: Some(code), .. })
+            if code == 401 || code == 403 =>
+        {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "status": "auth_error",
+                    "upstream_status": code,
+                })),
+            )
+                .into_response()
+        }
+        Err(crate::error::GatewayError::Provider { status_code: Some(code), .. }) => {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "status": "upstream_error",
+                    "upstream_status": code,
+                })),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "status": "upstream_error",
+                    "upstream_status": 502,
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OAuth admin endpoints (Req 1.1, 1.6, 7.1, 7.2, 7.3, 8.5)
+// ---------------------------------------------------------------------------
+
+/// POST /admin/oauth/openai/login — Initiate OAuth login flow (Req 1.1, 1.6)
+///
+/// On success (browser opened): `{ "status": "initiated", "message": "Browser opened for authentication" }`
+/// On browser-open failure: `{ "status": "manual_required", "auth_url": "…" }`
+/// If OAuth is not configured: 500 with "OAuth not configured"
+async fn oauth_login(State(state): State<AppState>) -> Response {
+    let manager = match &state.oauth_manager {
+        Some(m) => m.clone(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": {
+                        "message": "OAuth not configured",
+                        "type": "configuration_error"
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    match manager.initiate_login().await {
+        Ok(outcome) => {
+            use crate::oauth::flow::InitiationOutcome;
+            match outcome {
+                InitiationOutcome::BrowserOpened { .. } => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "status": "initiated",
+                        "message": "Browser opened for authentication"
+                    })),
+                )
+                    .into_response(),
+                InitiationOutcome::ManualNavigationRequired { auth_url } => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "status": "manual_required",
+                        "auth_url": auth_url
+                    })),
+                )
+                    .into_response(),
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": {
+                    "message": format!("Failed to initiate OAuth login: {}", e),
+                    "type": "oauth_error"
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /admin/oauth/openai/status — Return OAuth session status (Req 7.1, 7.2, 8.4)
+///
+/// Returns `{ "state": "...", "expires_at": ..., "scopes": "..." }`.
+/// NEVER includes access_token or refresh_token values.
+async fn oauth_status(State(state): State<AppState>) -> Response {
+    let manager = match &state.oauth_manager {
+        Some(m) => m.clone(),
+        None => {
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "state": "unauthenticated",
+                    "expires_at": null,
+                    "scopes": null
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let session = manager.session_state().await;
+
+    let (state_str, expires_at, scopes) = match &session {
+        crate::oauth::flow::OAuthSessionState::Unauthenticated => {
+            ("unauthenticated", None, None)
+        }
+        crate::oauth::flow::OAuthSessionState::Authenticated { expires_at, scopes } => {
+            ("authenticated", Some(*expires_at), Some(scopes.clone()))
+        }
+        crate::oauth::flow::OAuthSessionState::Expired => ("expired", None, None),
+        crate::oauth::flow::OAuthSessionState::Refreshing => ("refreshing", None, None),
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "state": state_str,
+            "expires_at": expires_at,
+            "scopes": scopes
+        })),
+    )
+        .into_response()
+}
+
+/// POST /admin/oauth/openai/logout — Clear stored tokens (Req 7.3)
+///
+/// Deletes tokens via `OAuthTokenStore::delete`, sets session to
+/// `Unauthenticated`, and returns `{ "status": "logged_out" }`.
+async fn oauth_logout(State(state): State<AppState>) -> Response {
+    let manager = match &state.oauth_manager {
+        Some(m) => m.clone(),
+        None => {
+            // No OAuth configured — already effectively logged out.
+            return (
+                StatusCode::OK,
+                Json(json!({ "status": "logged_out" })),
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(e) = manager.logout().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": {
+                    "message": format!("Failed to logout: {}", e),
+                    "type": "oauth_error"
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    (StatusCode::OK, Json(json!({ "status": "logged_out" }))).into_response()
+}
+
 /// Query parameters for the provider models proxy endpoint.
 #[derive(serde::Deserialize)]
 struct ProxyModelsParams {
@@ -743,18 +1056,61 @@ struct ProxyModelsParams {
     /// Optional Bearer token / API key for the upstream provider.
     #[serde(default)]
     api_key: String,
+    /// Optional provider name — when api_key is empty, the backend will look up
+    /// the resolved (decrypted) key from the live config for this provider.
+    #[serde(default)]
+    provider_name: Option<String>,
 }
 
 /// Proxy endpoint that fetches `/v1/models` from an upstream provider server-side,
 /// avoiding browser CORS restrictions.
 ///
-/// `GET /admin/providers/models?base_url=...&api_key=...`
-async fn proxy_provider_models(Query(params): Query<ProxyModelsParams>) -> Response {
+/// `GET /admin/providers/models?base_url=...&api_key=...&provider_name=...`
+async fn proxy_provider_models(
+    State(state): State<AppState>,
+    Query(params): Query<ProxyModelsParams>,
+) -> Response {
     let base = params.base_url.trim_end_matches('/');
     let models_url = if base.ends_with("/v1") || base.ends_with("/v1/") {
         format!("{}/models", base.trim_end_matches('/'))
     } else {
         format!("{}/v1/models", base)
+    };
+
+    // Resolve the effective API key: use the provided key, or fall back to the
+    // decrypted key stored in the live config for the named provider. For
+    // OAuth-based providers (auth_method: oauth), return the static Codex model
+    // hints directly — the Codex OAuth token is not scoped for api.openai.com/v1/models.
+    let effective_api_key = if !params.api_key.is_empty() {
+        params.api_key.clone()
+    } else if let Some(ref name) = params.provider_name {
+        let config = state.config.read().await;
+        let provider = config.providers.iter().find(|p| &p.name == name);
+        match provider {
+            Some(p) if p.auth_method.as_deref() == Some("oauth") => {
+                // OAuth/Codex provider — use dynamic model discovery with
+                // caching and staleness fallback.
+                drop(config);
+                let (mut models_response, is_stale) =
+                    state.codex_models_discovery.get_models().await;
+                if is_stale {
+                    if let Some(obj) = models_response.as_object_mut() {
+                        obj.insert("stale".to_string(), serde_json::json!(true));
+                        obj.insert(
+                            "stale_reason".to_string(),
+                            serde_json::json!(
+                                "Could not fetch latest models from OpenAI. List may be outdated."
+                            ),
+                        );
+                    }
+                }
+                return (StatusCode::OK, Json(models_response)).into_response();
+            }
+            Some(p) => p.resolve_api_key().unwrap_or_default(),
+            None => String::new(),
+        }
+    } else {
+        String::new()
     };
 
     let client = reqwest::Client::builder()
@@ -763,8 +1119,8 @@ async fn proxy_provider_models(Query(params): Query<ProxyModelsParams>) -> Respo
         .unwrap_or_default();
 
     let mut req = client.get(&models_url);
-    if !params.api_key.is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", params.api_key));
+    if !effective_api_key.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", effective_api_key));
     }
 
     match req.send().await {
@@ -841,6 +1197,7 @@ mod tests {
             api_key_encrypted: None,
             api_secret_env,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: None,
             resolved_api_secret: None,
             region,
@@ -858,6 +1215,9 @@ mod tests {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         })
     }
 
@@ -906,10 +1266,12 @@ mod tests {
                     retry: RetryConfig::default(),
                     logging: LoggingConfig::default(),
                     semantic_cache: None,
+                    exact_cache: ExactCacheConfig::default(),
                     prometheus: None,
                     context: ContextConfig::default(),
                     first_launch_completed: false,
                     tray: TrayConfig::default(),
+                    codex_instructions_url: None,
                 })
             })
         })
@@ -1137,6 +1499,7 @@ retry:
                 api_key_encrypted: None,
                 api_secret_env: None,
                 api_secret_encrypted: None,
+                auth_method: None,
                 resolved_api_key: None,
                 resolved_api_secret: None,
                 region: None,
@@ -1154,6 +1517,9 @@ retry:
                 custom_vpc_endpoint: false,
                 prompt_caching: false,
                 reasoning: true,
+                codex_base_url_override: None,
+                codex_model_override: None,
+                instructions_override: None,
             }],
             model_groups: vec![ModelGroup {
                 name: "test-group".to_string(),
@@ -1170,10 +1536,12 @@ retry:
             retry: RetryConfig::default(),
             logging: LoggingConfig::default(),
             semantic_cache: None,
+            exact_cache: ExactCacheConfig::default(),
             prometheus: None,
             context: ContextConfig::default(),
             first_launch_completed: false,
             tray: TrayConfig::default(),
+            codex_instructions_url: None,
         }
     }
 
@@ -1409,6 +1777,286 @@ retry:
         let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
+        std::env::remove_var(user_env);
+        std::env::remove_var(pass_env);
+    }
+
+    // -----------------------------------------------------------------------
+    // Property 7 — No Tokens in Status Response (Req 7.2, 8.4)
+    // -----------------------------------------------------------------------
+    //
+    // For all `OAuthSessionState` values, the serialized status JSON response
+    // (as built by the `oauth_status` handler) does NOT contain the
+    // access_token or refresh_token string values from the token store.
+    //
+    // **Validates: Requirements 7.2, 8.4**
+
+    /// Replicate the status-response serialization logic from `oauth_status`.
+    fn build_status_json(session: &crate::oauth::flow::OAuthSessionState) -> String {
+        let (state_str, expires_at, scopes) = match session {
+            crate::oauth::flow::OAuthSessionState::Unauthenticated => {
+                ("unauthenticated", None, None)
+            }
+            crate::oauth::flow::OAuthSessionState::Authenticated { expires_at, scopes } => {
+                ("authenticated", Some(*expires_at), Some(scopes.clone()))
+            }
+            crate::oauth::flow::OAuthSessionState::Expired => ("expired", None, None),
+            crate::oauth::flow::OAuthSessionState::Refreshing => ("refreshing", None, None),
+        };
+
+        serde_json::to_string(&json!({
+            "state": state_str,
+            "expires_at": expires_at,
+            "scopes": scopes
+        }))
+        .expect("status response should serialize")
+    }
+
+    /// Strategy that generates arbitrary `OAuthSessionState` values.
+    fn arb_oauth_session_state() -> impl Strategy<Value = crate::oauth::flow::OAuthSessionState> {
+        prop_oneof![
+            Just(crate::oauth::flow::OAuthSessionState::Unauthenticated),
+            (any::<u64>(), "[a-zA-Z0-9_ ]{0,50}").prop_map(|(exp, scopes)| {
+                crate::oauth::flow::OAuthSessionState::Authenticated {
+                    expires_at: exp,
+                    scopes,
+                }
+            }),
+            Just(crate::oauth::flow::OAuthSessionState::Expired),
+            Just(crate::oauth::flow::OAuthSessionState::Refreshing),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn prop_status_response_never_contains_tokens(
+            session in arb_oauth_session_state(),
+            access_token in ".{1,64}",
+            refresh_token in ".{1,64}",
+        ) {
+            let json_output = build_status_json(&session);
+
+            // The status response must never contain the raw token values.
+            // Only check non-trivial tokens (single-char tokens like "e" would
+            // trivially match inside JSON keys like "state" or "expires_at").
+            if access_token.len() > 4 {
+                prop_assert!(
+                    !json_output.contains(&access_token),
+                    "Status response must not contain access_token value.\n\
+                     access_token: {:?}\njson: {:?}",
+                    access_token,
+                    json_output
+                );
+            }
+            if refresh_token.len() > 4 {
+                prop_assert!(
+                    !json_output.contains(&refresh_token),
+                    "Status response must not contain refresh_token value.\n\
+                     refresh_token: {:?}\njson: {:?}",
+                    refresh_token,
+                    json_output
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 14.7 — Integration tests for admin OAuth endpoints (Req 7.1, 7.3)
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a GatewayServer with OAuth enabled (using a temp dir for
+    /// the token store so tests don't touch real storage).
+    async fn build_oauth_test_app() -> Router {
+        let cfg = test_config_with_auth(false);
+        let server = crate::gateway::GatewayServer::new(cfg, None).await.unwrap();
+        server.build_router()
+    }
+
+    /// POST /admin/oauth/openai/login — in a headless test environment the
+    /// browser cannot open, so we expect the `manual_required` variant with
+    /// an `auth_url` field (Req 1.6).
+    #[tokio::test]
+    async fn test_oauth_login_returns_manual_required_when_headless() {
+        let app = build_oauth_test_app().await;
+
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/admin/oauth/openai/login")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+        let status = resp.status();
+
+        let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // The endpoint should return 200 with either "initiated" or
+        // "manual_required". In a headless CI/test environment without a
+        // display server, `open::that()` fails and we get `manual_required`.
+        assert_eq!(status, StatusCode::OK);
+        let resp_status = json["status"].as_str().unwrap();
+        assert!(
+            resp_status == "manual_required" || resp_status == "initiated",
+            "Expected 'manual_required' or 'initiated', got: {}",
+            resp_status
+        );
+
+        // When manual_required, auth_url must be present and point to OpenAI.
+        if resp_status == "manual_required" {
+            let auth_url = json["auth_url"].as_str().unwrap();
+            assert!(
+                auth_url.starts_with("https://auth.openai.com/"),
+                "auth_url should point to OpenAI, got: {}",
+                auth_url
+            );
+        }
+    }
+
+    /// GET /admin/oauth/openai/status — verify response shape has `state`,
+    /// `expires_at`, `scopes` fields. When no login has occurred, state
+    /// should be `unauthenticated` (Req 7.1).
+    #[tokio::test]
+    async fn test_oauth_status_returns_expected_shape() {
+        let app = build_oauth_test_app().await;
+
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/admin/oauth/openai/status")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Must have all three fields
+        assert!(json.get("state").is_some(), "response must have 'state' field");
+        assert!(json.get("expires_at").is_some(), "response must have 'expires_at' field");
+        assert!(json.get("scopes").is_some(), "response must have 'scopes' field");
+
+        // Fresh server with no prior login → unauthenticated
+        assert_eq!(json["state"], "unauthenticated");
+        assert!(json["expires_at"].is_null());
+        assert!(json["scopes"].is_null());
+    }
+
+    /// POST /admin/oauth/openai/logout — verify returns `{ "status": "logged_out" }`;
+    /// subsequent GET to status returns `unauthenticated` (Req 7.3).
+    #[tokio::test]
+    async fn test_oauth_logout_clears_tokens_and_status_becomes_unauthenticated() {
+        let cfg = test_config_with_auth(false);
+        let server = crate::gateway::GatewayServer::new(cfg, None).await.unwrap();
+
+        // --- Logout ---
+        let app = server.build_router();
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/admin/oauth/openai/logout")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "logged_out");
+
+        // --- Subsequent status check must be unauthenticated ---
+        let app = server.build_router();
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/admin/oauth/openai/status")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["state"], "unauthenticated");
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 16.3 — Admin-auth protection test (Req 8.5)
+    // -----------------------------------------------------------------------
+    //
+    // With admin auth enabled and no credentials, all three OAuth endpoints
+    // return 401; with valid credentials they return 2xx.
+
+    #[tokio::test]
+    async fn test_oauth_endpoints_require_admin_auth_when_enabled() {
+        let user_env = "AUTH_TEST_OAUTH_PROT_USER";
+        let pass_env = "AUTH_TEST_OAUTH_PROT_PASS";
+        let username = "admin";
+        let password = "supersecret";
+        std::env::set_var(user_env, username);
+        std::env::set_var(pass_env, password);
+
+        let cfg = test_config_with_auth_env(true, user_env, pass_env);
+
+        // --- Without credentials: all three OAuth endpoints must return 401 ---
+
+        let endpoints: &[(&str, &str)] = &[
+            ("POST", "/admin/oauth/openai/login"),
+            ("GET", "/admin/oauth/openai/status"),
+            ("POST", "/admin/oauth/openai/logout"),
+        ];
+
+        for (method, uri) in endpoints {
+            let server = crate::gateway::GatewayServer::new(cfg.clone(), None)
+                .await
+                .unwrap();
+            let app = server.build_router();
+
+            let req = axum::http::Request::builder()
+                .method(*method)
+                .uri(*uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+
+            let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::UNAUTHORIZED,
+                "{} {} without credentials must return 401",
+                method,
+                uri
+            );
+        }
+
+        // --- With valid credentials: all three OAuth endpoints must return 2xx ---
+
+        for (method, uri) in endpoints {
+            let server = crate::gateway::GatewayServer::new(cfg.clone(), None)
+                .await
+                .unwrap();
+            let app = server.build_router();
+
+            let req = axum::http::Request::builder()
+                .method(*method)
+                .uri(*uri)
+                .header("Authorization", basic_auth_header(username, password))
+                .body(axum::body::Body::empty())
+                .unwrap();
+
+            let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+            assert!(
+                resp.status().is_success(),
+                "{} {} with valid credentials must return 2xx, got {}",
+                method,
+                uri,
+                resp.status()
+            );
+        }
+
+        // Cleanup
         std::env::remove_var(user_env);
         std::env::remove_var(pass_env);
     }

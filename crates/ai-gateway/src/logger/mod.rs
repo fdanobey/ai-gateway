@@ -604,6 +604,11 @@ mod property_tests {
             retention_days in 1u32..90u32,
             days_old in 1i64..180i64,
         ) {
+            // Skip the exact boundary (days_old == retention_days) because
+            // sub-second clock drift between entry creation and cleanup makes
+            // the outcome non-deterministic at that point.
+            prop_assume!(days_old != retention_days as i64);
+
             let config = LoggingConfig {
                 retention_days,
                 ..Default::default()

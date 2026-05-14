@@ -51,6 +51,10 @@ pub struct Config {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub semantic_cache: Option<SemanticCacheConfig>,
+    /// Tier-1 in-memory exact-match response cache.
+    /// Defaults to enabled — see [`ExactCacheConfig::default`].
+    #[serde(default)]
+    pub exact_cache: ExactCacheConfig,
     #[serde(default)]
     pub prometheus: Option<PrometheusConfig>,
     #[serde(default)]
@@ -59,6 +63,11 @@ pub struct Config {
     pub first_launch_completed: bool,
     #[serde(default)]
     pub tray: TrayConfig,
+    /// Optional override for the Codex system-prompt source URL.
+    /// Defaults to [`crate::codex::instructions::DEFAULT_CODEX_INSTRUCTIONS_URL`]
+    /// at fetch time when absent. See [`crate::codex::instructions`].
+    #[serde(default)]
+    pub codex_instructions_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -314,6 +323,12 @@ pub struct Provider {
     pub api_secret_env: Option<String>,
     #[serde(default)]
     pub api_secret_encrypted: Option<String>,
+    /// Authentication method override. When set to `Some("oauth")`, the router
+    /// resolves the Bearer token from the OAuth token store instead of
+    /// `api_key_env` / `api_key_encrypted`. Currently only supported for
+    /// `provider_type: openai`. See [`crate::oauth`].
+    #[serde(default)]
+    pub auth_method: Option<String>,
     #[serde(skip, default)]
     pub resolved_api_key: Option<String>,
     #[serde(skip, default)]
@@ -372,6 +387,19 @@ pub struct Provider {
     /// to models that support extended thinking (Claude 3.5 Sonnet+).
     #[serde(default = "default_true")]
     pub reasoning: bool,
+
+    /// Override the Codex backend URL. Only honoured for oauth+openai providers.
+    #[serde(default)]
+    pub codex_base_url_override: Option<String>,
+
+    /// Pin the Codex model independent of the client's requested model.
+    /// May be any non-empty string the Codex backend accepts.
+    #[serde(default)]
+    pub codex_model_override: Option<String>,
+
+    /// Replace the Codex system prompt entirely for this provider.
+    #[serde(default)]
+    pub instructions_override: Option<String>,
 }
 
 impl Provider {
@@ -746,6 +774,51 @@ fn default_max_cache_size() -> usize {
     10000
 }
 
+/// Tier-1 in-memory exact-match cache configuration.
+///
+/// Catches byte-for-byte identical retries (and stream/non-stream variants
+/// of the same request) with zero embedding overhead.  Independent of the
+/// optional [`SemanticCacheConfig`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExactCacheConfig {
+    /// Master switch.  Default: enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Maximum number of cached entries before oldest-first eviction.
+    #[serde(default = "default_exact_max_entries")]
+    pub max_entries: usize,
+    /// Per-entry TTL in seconds.
+    #[serde(default = "default_exact_ttl")]
+    pub ttl_seconds: u64,
+    /// Maximum temperature for a request to be considered cacheable.
+    /// Higher temperatures imply non-determinism and are not cached.
+    #[serde(default = "default_exact_temperature_threshold")]
+    pub temperature_threshold: f32,
+}
+
+impl Default for ExactCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_entries: default_exact_max_entries(),
+            ttl_seconds: default_exact_ttl(),
+            temperature_threshold: default_exact_temperature_threshold(),
+        }
+    }
+}
+
+fn default_exact_max_entries() -> usize {
+    5000
+}
+
+fn default_exact_ttl() -> u64 {
+    3600
+}
+
+fn default_exact_temperature_threshold() -> f32 {
+    0.15
+}
+
 /// Prometheus metrics configuration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrometheusConfig {
@@ -832,6 +905,7 @@ mod runtime_resolution_tests {
             api_key_encrypted: None,
             api_secret_env: None,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: None,
             resolved_api_secret: None,
             region: None,
@@ -849,6 +923,9 @@ mod runtime_resolution_tests {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         };
         
         assert_eq!(provider.resolve_api_key(), Some("sk-test123".to_string()));
@@ -866,6 +943,7 @@ mod runtime_resolution_tests {
             api_key_encrypted: None,
             api_secret_env: None,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: None,
             resolved_api_secret: None,
             region: None,
@@ -883,6 +961,9 @@ mod runtime_resolution_tests {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         };
         
         assert_eq!(provider.resolve_api_key(), None);
@@ -904,6 +985,7 @@ mod runtime_resolution_tests {
             api_key_encrypted: None,
             api_secret_env: None,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: None,
             resolved_api_secret: None,
             region: None,
@@ -921,6 +1003,9 @@ mod runtime_resolution_tests {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         };
         
         let resolved = provider.resolve_custom_headers();
@@ -940,6 +1025,7 @@ mod runtime_resolution_tests {
             api_key_encrypted: Some("enc-v1:abc:def".to_string()),
             api_secret_env: None,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: Some("decrypted-key".to_string()),
             resolved_api_secret: None,
             region: None,
@@ -957,6 +1043,9 @@ mod runtime_resolution_tests {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         };
 
         assert_eq!(provider.resolve_api_key(), Some("decrypted-key".to_string()));
@@ -972,6 +1061,7 @@ mod runtime_resolution_tests {
             api_key_encrypted: None,
             api_secret_env: None,
             api_secret_encrypted: None,
+            auth_method: None,
             resolved_api_key: None,
             resolved_api_secret: None,
             region: None,
@@ -989,6 +1079,9 @@ mod runtime_resolution_tests {
             custom_vpc_endpoint: false,
             prompt_caching: false,
             reasoning: true,
+            codex_base_url_override: None,
+            codex_model_override: None,
+            instructions_override: None,
         };
 
         assert!(provider.has_plaintext_api_key_input());
